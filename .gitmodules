@@ -1,0 +1,18 @@
+[submodule "NeuroPy"]
+	path = NeuroPy
+	url = https://github.com/CommanderPho/NeuroPy.git
+[submodule "pyPhoPlaceCellAnalysis"]
+	path = pyPhoPlaceCellAnalysis
+	url = https://github.com/CommanderPho/pyPhoPlaceCellAnalysis.git
+[submodule "pyPhoCoreHelpers"]
+	path = pyPhoCoreHelpers
+	url = https://github.com/CommanderPho/pyPhoCoreHelpers.git
+[submodule "pyqode.core"]
+	path = pyqode.core
+	url = https://github.com/CommanderPho/pyqode.core.git
+[submodule "pyqode.python"]
+	path = pyqode.python
+	url = https://github.com/CommanderPho/pyqode.python.git
+[submodule "Spike3D"]
+	path = Spike3D
+	url = https://github.com/CommanderPho/Spike3D.git
