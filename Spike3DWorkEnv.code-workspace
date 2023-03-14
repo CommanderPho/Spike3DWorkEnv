@@ -1,0 +1,11 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"dvc.dvcPath": "dvc",
+		"dvc.pythonPath": "C:/Users/pho/AppData/Local/pypoetry/Cache/virtualenvs/spike3d-WtdfU5rp-py3.9/Scripts/python.exe"
+	}
+}
