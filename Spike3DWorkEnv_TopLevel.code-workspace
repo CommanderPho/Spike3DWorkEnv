@@ -1,0 +1,28 @@
+{
+	"folders": [
+		{
+			"name": "Spike3D",
+			"path": "Spike3D"
+		},
+		{
+			"name": "neuropy",
+			"path": "NeuroPy/neuropy"
+		},
+		{
+			"name": "pyphocorehelpers",
+			"path": "pyPhoCoreHelpers/src/pyphocorehelpers"
+		},
+		{
+			"name": "pyphoplacecellanalysis",
+			"path": "pyPhoPlaceCellAnalysis/src/pyphoplacecellanalysis"
+		},
+		{
+			"name": "tests",
+			"path": "tests"
+		}
+	],
+	"settings": {
+		"dvc.dvcPath": "dvc",
+		"dvc.pythonPath": "C:/Users/pho/AppData/Local/pypoetry/Cache/virtualenvs/spike3d-WtdfU5rp-py3.9/Scripts/python.exe"
+	}
+}
