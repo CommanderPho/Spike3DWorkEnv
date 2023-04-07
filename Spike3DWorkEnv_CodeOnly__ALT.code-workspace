@@ -1,0 +1,73 @@
+{
+	"folders": [
+		{
+			"path": "Spike3D"
+		},
+		{
+			"path": "NeuroPy/neuropy"
+		},
+		{
+			"path": "pyPhoCoreHelpers/src/pyphocorehelpers"
+		},
+		{
+			"path": "pyPhoPlaceCellAnalysis/src/pyphoplacecellanalysis"
+		},
+		{
+			"path": "tests"
+		}
+	],
+	"settings": {
+		"dvc.dvcPath": "dvc",
+		"dvc.pythonPath": "C:/Users/pho/AppData/Local/pypoetry/Cache/virtualenvs/spike3d-WtdfU5rp-py3.9/Scripts/python.exe"
+	},
+	"tasks": {
+		"version": "2.0.0",
+		"tasks": [
+			{
+				"label": "echo",
+				"type": "shell",
+				"command": "echo ${workspaceFolder}",
+				"problemMatcher": []
+			},
+			{
+				"label": "Run Jupyter Lab",
+				"type": "shell",
+				"command": "C:/Users/pho/AppData/Local/pypoetry/Cache/virtualenvs/spike3d-WtdfU5rp-py3.9/Scripts/python.exe -m jupyter lab &",
+				"options": {
+					"cwd": "${workspaceFolder}"
+				},
+				"presentation": {
+					"reveal": "never",
+					"panel": "dedicated"
+				},
+				"group": {
+					"kind": "none",
+					"isDefault": true
+				},
+				"isBackground": true,
+				"problemMatcher": []
+			},
+			{
+				"label": "Run Jupyter QtConsole",
+				"type": "shell",
+				"command": "${config:python.defaultInterpreterPath} -m jupyter qtconsole",
+				"options": {
+					"cwd": "${workspaceFolder}"
+				},
+				"presentation": {
+					"reveal": "always",
+					"panel": "new"
+				},
+				"group": {
+					"kind": "build",
+					"isDefault": true
+				}
+			}
+		]
+	},
+	"extensions": {
+		"recommendations": [
+			"ms-python.gather"
+		]
+	}
+}
