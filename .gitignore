@@ -3,3 +3,9 @@ EXTERNAL/TESTING/Logging/debug_com.PhoHale.Spike3D.pipeline.log
 folderico-green.ico
 global_batch_result.pkl
 test.hdf5
+symdex.db
+tags
+myproject.db
+full_project.db
+cscope.out
+cscope.files

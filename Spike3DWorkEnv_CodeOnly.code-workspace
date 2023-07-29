@@ -68,7 +68,8 @@
 	},
 	"extensions": {
 		"recommendations": [
-			"ms-python.gather"
+			"ms-python.gather",
+			"gruntfuggly.activitusbar"
 		]
 	}
 }

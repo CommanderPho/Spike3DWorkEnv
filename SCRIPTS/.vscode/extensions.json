@@ -1,0 +1,17 @@
+{
+	"recommendations": [
+		"ms-dotnettools.dotnet-interactive-vscode",
+		"neuron.neuron-ipe",
+		"felicio.vscode-fold",
+		"gimenete.github-linker",
+		"ahadcove.python-quick-print",
+		"mihaicosma.quick-python-printf",
+		"almenon.birdseye-vscode",
+		"roabramov.marks-to-outline",
+		"azmi.toolbar-extended-menu",
+		"documentator.documentator",
+		"alextobiasdev.sidewindow",
+		"amiralariska.vscode-extension-development-snippets",
+		"codeandstuff.vscode-navigate-edit-history"
+	]
+}
