@@ -1,4 +1,10 @@
-﻿desktop.ini
+﻿**/__pycache__/**
+**/.DS_Store
+**/ipynb_checkpoints
+**/.idea
+**/.virtual_documents
+**/.neptune
+desktop.ini
 EXTERNAL/TESTING/Logging/debug_com.PhoHale.Spike3D.pipeline.log
 folderico-green.ico
 global_batch_result.pkl
