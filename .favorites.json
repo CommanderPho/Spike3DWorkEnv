@@ -889,15 +889,6 @@
         "id": "RenN0EjCxw4oFrkB"
     },
     {
-        "type": "File",
-        "name": "c:\\Users\\pho\\repos\\Spike3DWorkEnv\\PhoPy3DPositionAnalysis2021\\EXTERNAL\\NotesAndDocumentation\\2022-06-20-RenderItems.md",
-        "parent_id": "LBqyWzJHK689sGID",
-        "fsPath": "c:\\Users\\pho\\repos\\Spike3DWorkEnv\\PhoPy3DPositionAnalysis2021\\EXTERNAL\\NotesAndDocumentation\\2022-06-20-RenderItems.md",
-        "workspaceRoot": null,
-        "workspacePath": null,
-        "id": "2Bf3uhTYrp9El5DU"
-    },
-    {
         "type": "Group",
         "name": "Importing",
         "parent_id": "xUqNdZLW8RBaj96t",
@@ -1205,7 +1196,8 @@
         "parent_id": "xUqNdZLW8RBaj96t",
         "workspaceRoot": null,
         "workspacePath": null,
-        "id": "GVBNYQoX5aIyfCui"
+        "id": "GVBNYQoX5aIyfCui",
+        "iconColor": "rgb(30, 144, 255)"
     },
     {
         "type": "Group",
@@ -1882,5 +1874,84 @@
         "workspaceRoot": null,
         "workspacePath": null,
         "id": "EZ5T6tMnBjHASbx0"
+    },
+    {
+        "type": "Group",
+        "name": "ScriptTemplating",
+        "parent_id": "GVBNYQoX5aIyfCui",
+        "workspaceRoot": null,
+        "workspacePath": null,
+        "id": "Ns6pe2vxirZVbDaC"
+    },
+    {
+        "type": "Directory",
+        "name": "c:\\Users\\pho\\repos\\Spike3DWorkEnv\\pyPhoPlaceCellAnalysis\\src\\pyphoplacecellanalysis\\Resources\\Templates",
+        "parent_id": "Ns6pe2vxirZVbDaC",
+        "fsPath": "c:\\Users\\pho\\repos\\Spike3DWorkEnv\\pyPhoPlaceCellAnalysis\\src\\pyphoplacecellanalysis\\Resources\\Templates",
+        "workspaceRoot": null,
+        "workspacePath": null,
+        "id": "xCyQIFcvSGR98XwV"
+    },
+    {
+        "type": "File",
+        "name": "c:\\Users\\pho\\repos\\Spike3DWorkEnv\\Spike3D\\SCRATCH\\LaunchViz.ipynb",
+        "parent_id": "Ns6pe2vxirZVbDaC",
+        "fsPath": "c:\\Users\\pho\\repos\\Spike3DWorkEnv\\Spike3D\\SCRATCH\\LaunchViz.ipynb",
+        "workspaceRoot": null,
+        "workspacePath": null,
+        "id": "DNcTMpwdOBHYIvFK"
+    },
+    {
+        "type": "Group",
+        "name": "Animations",
+        "parent_id": "hf4ZMbGPeHxzqrLA",
+        "workspaceRoot": null,
+        "workspacePath": null,
+        "id": "ucmDGbKXV7UEZWoC",
+        "iconColor": "rgb(199, 21, 133)"
+    },
+    {
+        "type": "File",
+        "name": "c:\\Users\\pho\\repos\\Spike3DWorkEnv\\pyPhoPlaceCellAnalysis\\src\\pyphoplacecellanalysis\\General\\Mixins\\DisplayHelpers.py",
+        "parent_id": "ucmDGbKXV7UEZWoC",
+        "fsPath": "c:\\Users\\pho\\repos\\Spike3DWorkEnv\\pyPhoPlaceCellAnalysis\\src\\pyphoplacecellanalysis\\General\\Mixins\\DisplayHelpers.py",
+        "workspaceRoot": null,
+        "workspacePath": null,
+        "id": "mi9z5jN6er4PJgRK"
+    },
+    {
+        "type": "File",
+        "name": "c:\\Users\\pho\\repos\\Spike3DWorkEnv\\pyPhoPlaceCellAnalysis\\src\\pyphoplacecellanalysis\\General\\Mixins\\TimeWindowPlaybackMixin.py",
+        "parent_id": "ucmDGbKXV7UEZWoC",
+        "fsPath": "c:\\Users\\pho\\repos\\Spike3DWorkEnv\\pyPhoPlaceCellAnalysis\\src\\pyphoplacecellanalysis\\General\\Mixins\\TimeWindowPlaybackMixin.py",
+        "workspaceRoot": null,
+        "workspacePath": null,
+        "id": "oMaXPQ9h7gurEpy2"
+    },
+    {
+        "type": "Group",
+        "name": "Templating",
+        "parent_id": null,
+        "workspaceRoot": null,
+        "workspacePath": null,
+        "id": "fXNOersVtMqbZT8H"
+    },
+    {
+        "type": "File",
+        "name": "c:\\Users\\pho\\repos\\Spike3DWorkEnv\\pyPhoPlaceCellAnalysis\\src\\pyphoplacecellanalysis\\General\\Batch\\pythonScriptTemplating.py",
+        "parent_id": "Ns6pe2vxirZVbDaC",
+        "fsPath": "c:\\Users\\pho\\repos\\Spike3DWorkEnv\\pyPhoPlaceCellAnalysis\\src\\pyphoplacecellanalysis\\General\\Batch\\pythonScriptTemplating.py",
+        "workspaceRoot": null,
+        "workspacePath": null,
+        "id": "GgyZtw8LdEbplMQD"
+    },
+    {
+        "type": "File",
+        "name": "c:\\Users\\pho\\repos\\Spike3DWorkEnv\\pyPhoPlaceCellAnalysis\\src\\pyphoplacecellanalysis\\General\\Batch\\pythonScriptTemplating.py",
+        "parent_id": "fXNOersVtMqbZT8H",
+        "fsPath": "c:\\Users\\pho\\repos\\Spike3DWorkEnv\\pyPhoPlaceCellAnalysis\\src\\pyphoplacecellanalysis\\General\\Batch\\pythonScriptTemplating.py",
+        "workspaceRoot": null,
+        "workspacePath": null,
+        "id": "gr5ZYnoXskKFwqNb"
     }
 ]
