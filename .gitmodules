@@ -16,3 +16,6 @@
 [submodule "Spike3D"]
 	path = Spike3D
 	url = https://github.com/CommanderPho/Spike3D.git
+[submodule "matlab-to-neuropy-exporter"]
+	path = matlab-to-neuropy-exporter
+	url = https://github.com/CommanderPho/matlab-to-neuropy-exporter.git
