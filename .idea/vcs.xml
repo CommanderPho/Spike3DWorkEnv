@@ -3,8 +3,19 @@
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/NeuroPy" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/PyQtInspect-Open" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/PyQtInspect-Open/.README_Assets" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/PyQtInspect-Open/.README_zh" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/Spike3D" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/flexitext" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/matlab-to-neuropy-exporter" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/maxlikespy" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/napari-spike3d" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/pho_jupyter_preview_widget" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/portion" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/proplot" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/pyPhoCoreHelpers" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/pyPhoPlaceCellAnalysis" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/silx" vcs="Git" />
   </component>
 </project>
