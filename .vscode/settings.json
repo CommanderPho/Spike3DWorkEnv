@@ -1,5 +1,6 @@
 {
 "files.exclude": {
+  "**/.git": false,
   "**/__pycache__": true,
   "**/.classpath": true,
   "**/.factorypath": true,
@@ -9,7 +10,7 @@
   "**/.settings": true,
   "**/.spyproject": true,
   "**/.virtual_documents": true,
-  "**/.vscode": true,
+  // "**/.vscode": true,
   "**/*.asv": true,
   "**/*desktop.ini": true,
   "**/*Thumbs.db": true,
@@ -33,4 +34,5 @@
 "python.testing.pytestArgs": [
   "pyPhoPlaceCellAnalysis"
 ],
+
 }

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "spike3dworkenv"
-version = "0.1.0"
+version = "0.1.1"
 description = "Meta package containing all Spike3D repos"
 authors = ["Pho Hale <PhoHale@gmail.com>"]
 readme = "README.md"
@@ -8,7 +8,7 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = ">=3.9.2,<3.10"
 tox = "^4.6.4"
-pip = "^23.2.1"
+pip = "^24.0"
 ipython = "^8.9.0"
 ipykernel = "^6.21.2"
 vulture = "^2.7"

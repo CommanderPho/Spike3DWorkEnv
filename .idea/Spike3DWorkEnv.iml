@@ -54,7 +54,7 @@
       <excludeFolder url="file://$MODULE_DIR$/NeuroPy/tests/.vscode" />
       <excludeFolder url="file://$MODULE_DIR$/NeuroPy/useful_scripts" />
     </content>
-    <orderEntry type="jdk" jdkName="Poetry (Spike3DWorkEnv)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Python 3.9 virtualenv at C:\Users\pho\repos\Spike3DWorkEnv\Spike3D\.venv" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
   <component name="PackageRequirementsSettings">
