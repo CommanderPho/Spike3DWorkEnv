@@ -1,27 +1,45 @@
-[tool.poetry]
+[project]
 name = "spike3dworkenv"
 version = "0.1.0"
 description = "Meta package containing all Spike3D repos"
-authors = ["Pho Hale <PhoHale@gmail.com>"]
+authors = [{ name = "Pho Hale", email = "PhoHale@gmail.com" }]
+requires-python = ">=3.9.2,<3.10"
 readme = "README.md"
+dependencies = [
+    "tox>=4.6.4,<5",
+    "pip>=23.2.1,<24",
+    "ipython>=8.9.0,<9",
+    "ipykernel>=6.21.2,<7",
+    "vulture~=2.7",
+]
 
-[tool.poetry.dependencies]
-python = ">=3.9.2,<3.10"
-tox = "^4.6.4"
-pip = "^23.2.1"
-ipython = "^8.9.0"
-ipykernel = "^6.21.2"
-vulture = "^2.7"
+[dependency-groups]
+dev = [
+    "setuptools>=67.3.1,<68",
+    "cookiecutter>=2.1.1,<3",
+]
+remote = [
+    "neuropy",
+    "pyphocorehelpers",
+    "pyphoplacecellanalysis",
+    "pylustrator",
+]
 
-[tool.poetry.group.dev.dependencies]
-setuptools = "^67.3.1"
-cookiecutter = "^2.1.1"
+[tool.uv]
+default-groups = [
+    "dev",
+    "remote",
+]
 
-[tool.poetry.group.remote.dependencies]
-neuropy = {path = "./NeuroPy", develop=true}
-pyphocorehelpers = {path = "./pyPhoCoreHelpers", develop=true}
-pyphoplacecellanalysis = {path = "./pyPhoPlaceCellAnalysis", develop=true}
-pylustrator = {path = "./pylustrator", develop=true}
+[tool.uv.sources]
+neuropy = { path = "./NeuroPy", editable = true }
+pyphocorehelpers = { path = "./pyPhoCoreHelpers", editable = true }
+pyphoplacecellanalysis = { path = "./pyPhoPlaceCellAnalysis", editable = true }
+pylustrator = { path = "./pylustrator", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [tool.vulture]
 exclude = ["pyPhoPlaceCellAnalysis/src/pyphoplacecellanalysis/External/"]
@@ -32,7 +50,3 @@ min_confidence = 100
 paths = ["pyPhoPlaceCellAnalysis/src/pyphoplacecellanalysis", "pyPhoCoreHelpers/src/pyphocorehelpers", "NeuroPy/neuropy"]
 sort_by_size = true
 verbose = false
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
