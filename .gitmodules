@@ -16,3 +16,6 @@
 [submodule "Spike3D"]
 	path = Spike3D
 	url = https://github.com/CommanderPho/Spike3D.git
+[submodule "vedo"]
+	path = vedo
+	url = https://github.com/CommanderPho/vedo.git
