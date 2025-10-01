@@ -42,6 +42,7 @@ gita git pull
 ## switch to common stable branch
 gita super main-libs-group checkout release/pho-diba-2025-paper
 gita shell uv lock
+gita shell Spike3D uv sync --all-extras
 
 ## switch to dev branchs:
 gita super NeuroPy checkout feature/safe-advance
