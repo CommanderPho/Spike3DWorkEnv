@@ -23,7 +23,9 @@ uv tool install gita
 ```
 
 ```ps1
-cd "H:\TEMP\Spike3DEnv_ExploreUpgrade\Spike3DWorkEnv"
+cd "H:\TEMP\Spike3DEnv_ExploreUpgrade\Spike3DWorkEnv" ## Windows
+
+cd "/scratch/kdiba_root/kdiba99/halechr/repos/Spike3D_PaperEnv" ## Greatlakes Unix
 
 gita add NeuroPy NeuroPy/
 gita add pyPhoCoreHelpers pyPhoCoreHelpers/
@@ -87,3 +89,17 @@ gita super checkout release/pho-diba-2025-paper
 
 ```
 
+```
+git rm --cached PyQtInspect-Open
+git rm --cached flexitext
+git rm --cached matlab-to-neuropy-exporter
+git rm --cached maxlikespy
+git rm --cached napari-spike3d
+git rm --cached portion
+git rm --cached proplot
+git rm --cached pylustrator
+git rm --cached pho_jupyter_preview_widget
+git rm --cached TrajSeg
+git rm --cached silx
+git rm --cached vedo
+```
