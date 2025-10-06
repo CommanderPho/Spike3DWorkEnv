@@ -51,7 +51,6 @@ gita super NeuroPy checkout feature/safe-advance
 gita super pyPhoCoreHelpers pyPhoPlaceCellAnalysis checkout develop
 gita super Spike3D checkout master
 gita shell uv lock
-
 gita shell Spike3D uv sync --all-extras
 
 ```
