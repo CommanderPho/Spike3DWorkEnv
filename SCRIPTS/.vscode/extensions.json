@@ -12,6 +12,7 @@
 		"documentator.documentator",
 		"alextobiasdev.sidewindow",
 		"amiralariska.vscode-extension-development-snippets",
-		"codeandstuff.vscode-navigate-edit-history"
+		"codeandstuff.vscode-navigate-edit-history",
+		"danielbayley.custom-app-icons"
 	]
 }
