@@ -1,0 +1,25 @@
+[project]
+name = "neuro-monorepo"
+version = "0.1.0"
+description = "Monorepo for neuroscientific data analysis"
+requires-python = ">=3.9"
+dependencies = [
+    "pyPhoCoreHelpers",
+    "NeuroPy",
+    "pyPhoPlaceCellAnalysis",
+    "Spike3D",
+]
+
+[tool.uv.workspace]
+members = [
+    "NeuroPy",
+    "pyPhoCoreHelpers",
+    "pyPhoPlaceCellAnalysis",
+    "Spike3D",
+]
+
+[tool.uv.sources]
+pyPhoCoreHelpers = { workspace = true }
+NeuroPy = { workspace = true }
+pyPhoPlaceCellAnalysis = { workspace = true }
+Spike3D = { workspace = true }
