@@ -1,0 +1,16 @@
+"Rank-Order Results or Parameters": {
+"scope": "python",
+"prefix": "@RANKORDERPARAMS",
+"body": [
+	"rank_order_results = curr_active_pipeline.global_computation_results.computed_data.get('RankOrder', None)",
+	"if rank_order_results is not None:",
+	"    minimum_inclusion_fr_Hz: float = rank_order_results.minimum_inclusion_fr_Hz",
+	"    included_qclu_values: List[int] = rank_order_results.included_qclu_values",
+	"else:        ",
+	"    ## get from parameters:",
+	"    minimum_inclusion_fr_Hz: float = curr_active_pipeline.global_computation_results.computation_config.rank_order_shuffle_analysis.minimum_inclusion_fr_Hz",
+	"    included_qclu_values: List[int] = curr_active_pipeline.global_computation_results.computation_config.rank_order_shuffle_analysis.included_qclu_values",
+	"$1",
+],
+"description": "imports the rank-order results ore the `global_computation_results.computation_config.rank_order_shuffle_analysis` params"
+},

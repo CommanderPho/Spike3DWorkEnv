@@ -1,0 +1,66 @@
+name: demo-pyPhoCoreHelpers
+channels:
+  - conda-forge
+  # - defaults
+  # - pytorch
+  # - fastai
+dependencies:
+  - python>=3.9
+  - pip
+  # BASICS
+  - numpy
+  - scipy
+  - pandas
+  - tqdm
+  # - click
+  - ipython
+  # VISUALIZATION
+  - matplotlib
+  - ipympl  # interactive matplotlib plots
+  - pyqtgraph
+  - seaborn
+  # - altair
+  # - yellowbrick
+  # ML, STATS & DEEP LEARNING
+  # - statsmodels
+  # - scikit-learn
+  # - sktime
+  # - tslearn
+  # - xgboost
+  # - catboost
+  # - lightgbm
+  # - pytorch
+  # - fastai  # activate fastai channel above!
+  # - tensorflow
+  # - keras
+  # - spacy
+  # OTHER TOOLS
+  # - optuna
+  # - dask
+  # - snakeviz
+  # DEVELOPMENT ONLY PACKAGES (could also be kept in a separate environment file)
+  - jupyterlab
+  - ipykernel
+  - pytest
+  - pytest-cov
+  - tox
+  - nbdime
+  - nbstripout
+  - sphinx
+  - recommonmark
+  - pip:
+     - -e .  # install git checkout of pyPhoCoreHelpers in editable mode
+     - indexed # for IndexedOrderedDict from the indexed package
+     - PyQt5Singleton # for Singleton class used by GlobalConnectionManager
+     - objsize
+    #  - pyPhoCoreHelpers
+    #  - NeuroPy
+     # add here only pip-packages that are not available in conda/conda-forge! E.g.:
+     # - icecream
+     # - jax
+     # - numpyro
+     # - funsor
+     # - neptune-client
+     # - neptune-contrib
+
+

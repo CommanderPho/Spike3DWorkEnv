@@ -1,0 +1,61 @@
+[project]
+name = "pyphocorehelpers"
+version = "0.4.7"
+description = "A collection of generally useful python code by Pho Hale"
+authors = [{ name = "Pho Hale", email = "CommanderPho@users.noreply.github.com" }]
+requires-python = ">=3.9,<3.12"
+readme = "README.md"
+dependencies = [
+    "objsize>=0.6.1,<0.7",
+    "indexed>=1.3.0,<2",
+    "h5py>=3.8.0,<4",
+    "numpy>=1.23.2,<2",
+    "pandas==1.5.3",
+    "ansi2html>=1.8.0,<2",
+    "mkdocs-gen-files>=0.5.0,<0.6",
+    "mkdocs-literate-nav>=0.6.1,<0.7",
+    "mkdocs-section-index>=0.3.8,<0.4",
+    "mkdocs-matplotlib>=0.10.1,<0.11",
+    "mkdocs-jupyter>=0.24.6,<0.25",
+    "mkdocstrings[python]>=0.24,<0.25",
+    "mkdocstrings-python~=1.9",
+    "cairosvg>=2.7.1,<3",
+    "neuropy",
+    "numba>=0.56.4,<0.57",
+    "umap-learn>=0.5.9.post2",
+]
+
+[dependency-groups]
+dev = [
+    "importlib-metadata>=6.0.0,<7",
+    "pylsp-rope>=0.1.17",
+    "python-lsp-server>=1.14.0",
+    "rope>=1.14.0",
+]
+viz = [
+    "pyvista>=0.43.0,<0.44",  # Supports newer VTK versions
+    "matplotlib>=3.6.3,<4",
+    "vedo",
+    "vtk>=9.2.4,<10",
+    "hdf5plugin>=4.1.1,<5",
+    "silx>=1.1.2,<2",
+    "PyQt5Singleton>=0.1,<0.2",
+    "QtPy>=2.1.0,<3",
+    "PyQt5-sip>=12.11.1,<13",
+    "PyQt5-Qt5==5.15.2",  # Use specific version with Windows wheels
+]
+
+[tool.uv]
+default-groups = [
+    "dev",
+    "viz",
+]
+
+[tool.uv.sources]
+vedo = { git = "https://github.com/CommanderPho/vedo.git", rev = "feature/merge-upstream" }
+neuropy = { path = "../NeuroPy", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+

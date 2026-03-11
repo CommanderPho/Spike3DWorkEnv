@@ -1,0 +1,2 @@
+[tool.uv.sources]
+pyphocorehelpers = { git = "https://github.com/CommanderPho/pyPhoCoreHelpers.git" }

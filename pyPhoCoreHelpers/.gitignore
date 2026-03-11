@@ -1,0 +1,71 @@
+# Temporary and binary files
+*~
+*.py[cod]
+*.so
+*.cfg
+!.isort.cfg
+!setup.cfg
+*.orig
+*.log
+*.pot
+__pycache__/*
+.cache/*
+.*.swp
+*/.ipynb_checkpoints/*
+.DS_Store
+
+# Project files
+.ropeproject
+.project
+.pydevproject
+.settings
+.idea
+.vscode
+tags
+
+# Package files
+*.egg
+*.eggs/
+.installed.cfg
+*.egg-info
+
+# Unittest and coverage
+htmlcov/*
+.coverage
+.coverage.*
+.tox
+junit*.xml
+coverage.xml
+.pytest_cache/
+
+# Build and docs folder/files
+build/*
+dist/*
+sdist/*
+docs/api/*
+docs/_rst/*
+docs/_build/*
+cover/*
+MANIFEST
+
+# Per-project virtualenvs
+.venv*/
+.conda*/
+**/__pycache__
+desktop.ini
+*.sha256
+src/cscope.files
+src/cscope.out
+src/myproject.db
+.sourcery.yaml
+**/.venv*
+
+typings
+src/pyphocorehelpers/Resources/fonts/NotoSansSymbols-Regular.ttf
+src/pyphocorehelpers/Resources/fonts/NotoSans-Regular.ttf
+src/pyphocorehelpers/Resources/fonts/AdobeVFPrototype.ttf
+src/pyphocorehelpers/Resources/fonts/BungeeColor-Regular_colr_Windows.ttf
+src/pyphocorehelpers/Resources/fonts/DejaVuSans/DejaVuSans-24-8-stripped.ttf
+src/pyphocorehelpers/Resources/fonts/DejaVuSans/DejaVuSans-24-4-stripped.ttf
+src/pyphocorehelpers/Resources/fonts/DejaVuSans/DejaVuSans-24-2-stripped.ttf
+src/pyphocorehelpers/Resources/fonts/DejaVuSans/DejaVuSans-24-1-stripped.ttf
