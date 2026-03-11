@@ -29,7 +29,7 @@ odd_lap_specific_epochs = lap_specific_epochs.label_slice(lap_specific_epochs.la
 """
 
 
-
+# @function_attributes(short_name=None, tags=['UNUSED'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2025-02-20 06:50', related_items=[])
 class CustomSessionFilter(object):
     """Currently used to try and build a description of the filter applied for purposes of caching."""
     def __init__(self, sess):
@@ -62,7 +62,7 @@ def _filter_function_factory(epoch_label, filter_name_suffix=None):
     return _temp_filter_session_by_curr_epoch
 
 
-
+# @function_attributes(short_name=None, tags=['filter'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2025-02-20 06:50', related_items=[])
 def build_custom_epochs_filters(sess, epoch_name_includelist=None, filter_name_suffix=None):
     """ Called by build_filters_any_epochs and build_filters_any_maze_epochs
     
@@ -102,7 +102,7 @@ def build_custom_epochs_filters(sess, epoch_name_includelist=None, filter_name_s
 ## Efficiently filter by cell type and desired ids
 def batch_filter_session(sess, position, spikes_df, epochs, debug_print=False):
     """a workaround to efficiently filter DataSession objects by epochs and neuron_type (currently hardcoded Pyramidal) that works around the issue with deepcopy(...) on DataSessions filled with Bapun's data."""
-    """ #TODO: 2022-08-05 - What is this doing, and why is it needed? """
+    """ #TODO: 2022-08-05 - What is this doing, and why is it needed? called by `batch_filter_session` """
     position.compute_higher_order_derivatives()
     pos_df = (
         position.compute_smoothed_position_info()

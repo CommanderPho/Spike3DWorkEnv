@@ -8,7 +8,10 @@
         "phohale.custom-text-transform",
         "vscode-icons-team.vscode-icons",
         "johnw42.pathslasher",
-        "pkief.material-icon-theme",
-        "grimmer.vscode-back-forward-button"
+		"grimmer.vscode-back-forward-button",
+		"ionide.discoverpanel",
+		"kawamataryo.copy-python-dotted-path",
+		"meta.pyrefly",
+		"ast-grep.ast-grep-vscode"
 	]
 }

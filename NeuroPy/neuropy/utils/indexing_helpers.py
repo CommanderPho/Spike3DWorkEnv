@@ -1,13 +1,16 @@
 from copy import deepcopy
 from typing import Union, Tuple, List, Dict, Set, Any, Optional, OrderedDict  # for OrderedMeta
+import nptyping as ND
 from nptyping import NDArray
 from contextlib import contextmanager, ContextDecorator
+from enum import Enum, auto
 
 import numpy as np
 import pandas as pd
 from functools import reduce # intersection_of_arrays, union_of_arrays
 
 from typing import Iterable, TypeVar, Dict, List, Tuple, Any, Optional
+from typing_extensions import TypeAlias
 
 T = TypeVar('T')
 
@@ -106,6 +109,44 @@ def unwrap_single_item(lst):
     return lst[0] if len(lst) == 1 else None
 
         
+def wrap_in_container_if_needed(value, container_types=(list, tuple, set, dict, NDArray), container_constructor=list):
+    """  When passing a scalar, it gets wrapped in a list (or whatever type is specified by `container_constructor`); but when passing an already list-like object, it is returned as-is:
+    Wrap a scalar value in a container if it is not already one of the given container_types.
+    
+    Parameters:
+      value: The value to be checked.
+      container_types: A tuple of types that are considered container-like.
+                       If value is an instance of one of these, it is returned as-is.
+      container_constructor: A callable that will be used to wrap the value
+                             if it is scalar. By default, this is the list constructor.
+                             
+    Returns:
+      Either the original value (if it is an instance of container_types)
+      or a new container (by default, a list) containing value.
+        
+    Usage:
+        from neuropy.utils.indexing_helpers import wrap_in_container_if_needed
+        
+        # When passing a scalar, it gets wrapped in a list:
+        a_value = wrap_in_container_if_needed('DirectionalLaps', container_constructor=list)
+        assert isinstance(a_value, list)
+        print(a_value)  # Output: ['DirectionalLaps']
+
+        # When passing an already list-like object, it is returned as-is:
+        another_value = wrap_in_container_if_needed(['DirectionalLaps'])
+        assert isinstance(another_value, list)
+        print(another_value)  # Output: ['DirectionalLaps']
+
+            
+    """
+    if isinstance(value, container_types):
+        return value
+    else:
+        return container_constructor([value])
+
+        
+        
+    
 def find_desired_sort_indicies(extant_arr, desired_sort_arr):
     """ Finds the set of sort indicies that can be applied to extant_arr s.t.
         (extant_arr[out_sort_idxs] == desired_sort_arr)
@@ -451,6 +492,28 @@ class NumpyHelpers:
         """ returns the result of `np.split(...)` but removes any empty sequences that it returns. """
         return [v for v in np.split(arr, indices_or_sections, **kwargs) if len(v) > 0] # exclude empty subsequences
         
+    @classmethod
+    def convert_to_array_recursive(cls, data: Any) -> Any:
+        """
+        Recursively converts lists and tuples in a nested structure into np.array objects.
+
+        Args:
+            data (Any): The input data, can be a list, tuple, dict, or other nested structure.
+
+        Returns:
+            Any: The transformed structure with lists and tuples replaced by np.array.
+
+        Usage:
+            result = convert_to_array_recursive([1, 2, (3, 4, [5, 6])])
+        """
+        if isinstance(data, (list, tuple)):
+            return np.array([cls.convert_to_array_recursive(item) for item in data])
+        elif isinstance(data, dict):
+            return {key: cls.convert_to_array_recursive(value) for key, value in data.items()}
+        else:
+            return data
+            
+        
 
 # ==================================================================================================================== #
 # Sorting/Joint-sorting                                                                                                #
@@ -544,7 +607,15 @@ def paired_individual_sorting(neuron_IDs_lists, sortable_values_lists):
     assert len(neuron_IDs_lists) == len(sortable_neuron_id_dicts)
     for a_sortable_neuron_id_dict in sortable_neuron_id_dicts:
         # Sort them now as needed:
-        curr_sorted_list = np.array(list(dict(sorted(a_sortable_neuron_id_dict.items(), key=lambda item: item[1])).keys()))
+        try:
+            curr_sorted_list = np.array(list(dict(sorted(a_sortable_neuron_id_dict.items(), key=lambda item: item[1])).keys()))
+        except ValueError as e:
+            ## ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all() - happens with 2D Pseudo2D frames
+            curr_sorted_list = np.array(list(dict(sorted(a_sortable_neuron_id_dict.items(), key=lambda item: item[1][0])).keys())) ## use only the position value, indpendent of the decoder
+
+        except Exception as e:
+            raise e
+
         sorted_lists.append(curr_sorted_list)
 
     assert [len(neuron_ids) == len(sorted_neuron_ids) for neuron_ids, sorted_neuron_ids in zip(neuron_IDs_lists, sorted_lists)], f"all items must be the same length."
@@ -554,7 +625,7 @@ def paired_individual_sorting(neuron_IDs_lists, sortable_values_lists):
 
 
 
-def find_nearest_time(df: pd.DataFrame, target_time: float, time_column_name:str='start', max_allowed_deviation:float=0.01, debug_print=False):
+def find_nearest_time(df_or_tarr: Union[NDArray, pd.DataFrame], target_time: float, time_column_name:str='start', max_allowed_deviation:float=0.01, debug_print=False) -> Tuple[Union[NDArray, pd.DataFrame], Optional[int], Optional[float], float]:
     """ finds the nearest time in the time_column_name matching the provided target_time
     
 
@@ -567,36 +638,67 @@ def find_nearest_time(df: pd.DataFrame, target_time: float, time_column_name:str
     df.iloc[closest_index]
 
     """
-    # Ensure the DataFrame is sorted (if you're not sure it's already sorted)
-    assert time_column_name in df.columns
-    if df[time_column_name].is_monotonic:
-        if debug_print:
-            print('The column is already sorted in ascending order.')
+    if isinstance(df_or_tarr, pd.DataFrame):
+        # DataFrame handling logic
+        # Ensure the DataFrame is sorted (if you're not sure it's already sorted)
+        assert time_column_name in df_or_tarr.columns
+        if not df_or_tarr[time_column_name].is_monotonic:
+            if debug_print:
+                print(f'WARNING: The column is not sorted in ascending order. Sorting now...')
+            df_or_tarr = df_or_tarr.sort_values(by=time_column_name, inplace=False)
+        else:
+            if debug_print:
+                print('The column is already sorted in ascending order.')      
+
+        # Use searchsorted to find the insertion point for the target time
+        insertion_index = df_or_tarr[time_column_name].searchsorted(target_time)
+
+        # Since searchsorted returns the index where the target should be inserted to
+        # maintain order, the closest time could be at this index or the previous index.
+        # We need to compare both to find the nearest time.
+        if insertion_index == 0:
+            # The target_time is smaller than all elements, so closest is the first item
+            closest_index = 0
+        elif insertion_index == len(df_or_tarr):
+            # The target_time is bigger than all elements, so closest is the last item
+            closest_index = len(df_or_tarr) - 1
+        else:
+            # The target_time is between two elements, find the nearest one
+            prev_time = df_or_tarr[time_column_name].iloc[insertion_index - 1] # @DA#TODO 2024-03-11 17:49: - [ ] Is .iloc okay here under all circumstances?
+            next_time = df_or_tarr[time_column_name].iloc[insertion_index]
+            # Compare the absolute difference to determine which is closer
+            closest_index = insertion_index if (next_time - target_time) < (target_time - prev_time) else insertion_index - 1
+
+        # Now extract the closest time using the index
+        closest_time = df_or_tarr[time_column_name].iloc[closest_index] ## NOTE .iloc here!
+            
+    elif isinstance(df_or_tarr, NDArray):
+        # NumPy array handling logic
+        ## a numpy array
+        t_arr = df_or_tarr
+        # Use searchsorted to find the insertion point for the target time
+        insertion_index = t_arr.searchsorted(target_time)
+
+        # Since searchsorted returns the index where the target should be inserted to
+        # maintain order, the closest time could be at this index or the previous index.
+        # We need to compare both to find the nearest time.
+        if insertion_index == 0:
+            # The target_time is smaller than all elements, so closest is the first item
+            closest_index = 0
+        elif insertion_index == len(t_arr):
+            # The target_time is bigger than all elements, so closest is the last item
+            closest_index = len(t_arr) - 1
+        else:
+            # The target_time is between two elements, find the nearest one
+            prev_time = t_arr[insertion_index - 1] # @DA#TODO 2024-03-11 17:49: - [ ] Is .iloc okay here under all circumstances?
+            next_time = t_arr[insertion_index]
+            # Compare the absolute difference to determine which is closer
+            closest_index = insertion_index if (next_time - target_time) < (target_time - prev_time) else insertion_index - 1
+
+        # Now extract the closest time using the index
+        closest_time = t_arr[closest_index] 
     else:
-        print(f'WARNING: The column is not sorted in ascending order. Sorting now...')
-        df = df.sort_values(by=time_column_name, inplace=False)
-
-    # Use searchsorted to find the insertion point for the target time
-    insertion_index = df[time_column_name].searchsorted(target_time)
-
-    # Since searchsorted returns the index where the target should be inserted to
-    # maintain order, the closest time could be at this index or the previous index.
-    # We need to compare both to find the nearest time.
-    if insertion_index == 0:
-        # The target_time is smaller than all elements, so closest is the first item
-        closest_index = 0
-    elif insertion_index == len(df):
-        # The target_time is bigger than all elements, so closest is the last item
-        closest_index = len(df) - 1
-    else:
-        # The target_time is between two elements, find the nearest one
-        prev_time = df[time_column_name].iloc[insertion_index - 1] # @DA#TODO 2024-03-11 17:49: - [ ] Is .iloc okay here under all circumstances?
-        next_time = df[time_column_name].iloc[insertion_index]
-        # Compare the absolute difference to determine which is closer
-        closest_index = insertion_index if (next_time - target_time) < (target_time - prev_time) else insertion_index - 1
-
-    # Now extract the closest time using the index
-    closest_time = df[time_column_name].iloc[closest_index] ## NOTE .iloc here!
+        raise ValueError(f'Unknown input data type, expected pd.DataFrame or NDArray, but instead it was of type: {type(df_or_tarr)}. df: {df_or_tarr}')
 
     matched_time_difference = closest_time - target_time
     if (max_allowed_deviation is not None) and (abs(matched_time_difference) > max_allowed_deviation):
@@ -609,7 +711,7 @@ def find_nearest_time(df: pd.DataFrame, target_time: float, time_column_name:str
         if debug_print:
             print(f"The closest start time to {target_time} is {closest_time} at index {closest_index}. Deviating by {matched_time_difference}")
 
-    return df, closest_index, closest_time, matched_time_difference
+    return df_or_tarr, closest_index, closest_time, matched_time_difference
 
 
 def find_nearest_times(df: pd.DataFrame, target_times: np.ndarray, time_column_name: str='start', max_allowed_deviation: float=0.01, debug_print=False):
@@ -731,6 +833,8 @@ def flatten_dict(d: Dict, parent_key='', sep='/') -> Dict:
     Usage:
         from neuropy.utils.indexing_helpers import flatten_dict
     
+        flat_dict = flatten_dict(a_dict, parent_key='', sep='/')
+    
     """
     if (not isinstance(d, dict)):
         if hasattr(d, 'to_dict'):
@@ -752,10 +856,45 @@ def flatten_dict(d: Dict, parent_key='', sep='/') -> Dict:
     return items
 
 
+# Benedict Helpers ___________________________________________________________________________________________________ #
+def get_values_from_keypaths(data, keypaths):
+    """ used with benedict-dicts to get nested values from a flat list of keypaths """
+    def get_value(d, keys):
+        for key in keys:
+            if isinstance(d, dict) and key in d:
+                d = d[key]
+            else:
+                return None
+        return d
+
+    return {kp: get_value(data, kp.split('.')) for kp in keypaths}
+
+def set_value_by_keypath(data, keypath, value):
+    """ used with benedict-dicts to set multiple nested values from a flat (non-nested) dict keypath:Value items """
+    keys = keypath.split('.')
+    d = data
+    for key in keys[:-1]:  # Traverse until the second last key
+        if key not in d or not isinstance(d[key], dict):
+            d[key] = {}  # Ensure path exists
+        d = d[key]
+    d[keys[-1]] = value  # Set final value
+
+
+def update_nested_dict(data, updates):
+    """ used with benedict-dicts to update nested values from a flat list of keypaths """
+    for keypath, value in updates.items():
+        set_value_by_keypath(data, keypath, value)
+        
+            
+
 # ==================================================================================================================== #
 #region PandasDataFrameHelpers                                                                                               #
 # ==================================================================================================================== #
     
+DataframeColumnsCheckTuple: TypeAlias = Tuple[List[str], List[str], List[str]]
+
+
+
 class PandasHelpers:
     """ various extensions and generalizations for numpy arrays 
     
@@ -763,6 +902,109 @@ class PandasHelpers:
 
 
     """
+    @classmethod
+    def check_columns(cls, dfs: Union[pd.DataFrame, List[pd.DataFrame], Dict[Any, pd.DataFrame]], required_columns: Optional[List[str]]=None, return_only_dfs_missing_columns: bool = True) -> Tuple[Union[DataframeColumnsCheckTuple, List[DataframeColumnsCheckTuple], Dict[str, DataframeColumnsCheckTuple]], Union[List[str], List[List[str]], Dict[str, List[str]]], bool]: # , warn_missing_columns: Optional[List[str]]=None
+        """
+        Check if all DataFrames in the given container have the required columns.
+        
+        Parameters:
+            dfs: A container that may be a single DataFrame, a list/tuple of DataFrames, or a dictionary with DataFrames as values.
+            required_columns: A list of column names that are required to be present in each DataFrame.
+            print_changes: If True, prints the columns that are missing from each DataFrame.
+        
+        Returns:
+            True if all DataFrames contain all the required columns, otherwise False.
+
+        Usage:
+
+            required_cols = ['missing_column', 'congruent_dir_bins_ratio', 'coverage', 'direction_change_bin_ratio', 'jump', 'laplacian_smoothness', 'longest_sequence_length', 'longest_sequence_length_ratio', 'monotonicity_score', 'sequential_correlation', 'total_congruent_direction_change', 'travel'] # Replace with actual column names you require
+            mall_have_all_required_columns, num_missing_columns, missing_columns, found_columns, all_df_columns) = PandasHelpers.check_columns({a_name:a_result.filter_epochs for a_name, a_result in filtered_decoder_filter_epochs_decoder_result_dict.items()}, required_cols, print_missing_columns=True)
+            debug_tuple
+            all_have_all_required_columns
+
+
+        """
+        def _subfn_check_and_report(df: pd.DataFrame, columns: List[str], identifier: Any = None) -> Tuple[DataframeColumnsCheckTuple, bool]:
+            """ captures: print_missing_columns
+            """
+            all_df_columns: List[str] = list(df.columns)
+            found_columns: List[str] = list(set(columns).intersection(df.columns))
+            missing_columns: List[str] = list(set(columns).difference(df.columns))
+            # has_all_columns = not missing_columns
+            
+            # if print_missing_columns and not has_all_columns:
+            #     df_name = f" (DataFrame Identifier: {identifier})" if identifier else ""
+            #     print(f"Missing required columns in DataFrame{df_name}: {missing_columns}")
+
+            return (missing_columns, found_columns, all_df_columns)
+            # return missing_columns, has_all_columns
+
+        missing_columns = []
+        all_have_all_required_columns: bool = True
+        # debug_args = []
+        debug_tuple = None
+        
+        if isinstance(dfs, pd.DataFrame):
+            columns_tuples = _subfn_check_and_report(dfs, required_columns)
+            missing_columns, found_columns, all_df_columns = columns_tuples
+            # missing_columns, found_columns, all_df_columns = _subfn_check_and_report(dfs, required_columns)
+            all_have_all_required_columns = (not missing_columns)
+            if not all_have_all_required_columns:
+                num_missing_columns = len(missing_columns)
+                # debug_args.append((missing_columns, found_columns, all_df_columns))
+                if return_only_dfs_missing_columns:
+                    ## always the case here
+                    pass
+
+        elif isinstance(dfs, (list, tuple)):
+            columns_tuples: List[List[str]] = [_subfn_check_and_report(df, required_columns, i) for i, df in enumerate(dfs)] # a list
+            missing_columns: List[List[str]] = [a_tuple[0] for a_tuple in columns_tuples] # a list
+
+            # missing_columns: List[Set[str]] = [_subfn_check_and_report(df, required_columns, i)[0] for i, df in enumerate(dfs)] # a list
+            all_have_all_required_columns = all([(not a_missing_columns_list) for a_missing_columns_list in missing_columns])
+            if not all_have_all_required_columns:
+                num_missing_columns = [len(a_missing_columns_list) for a_missing_columns_list in missing_columns]
+                if return_only_dfs_missing_columns:
+                    num_missing_columns = [len(a_missing_columns_list) for a_missing_columns_list in missing_columns if len(a_missing_columns_list) > 0]
+                    missing_columns = [a_tuple[0] for i, a_tuple in enumerate(columns_tuples) if num_missing_columns[i] > 0]
+                    found_columns = [a_tuple[1] for i, a_tuple in enumerate(columns_tuples) if num_missing_columns[i] > 0]
+                    all_df_columns = [a_tuple[2] for i, a_tuple in enumerate(columns_tuples) if num_missing_columns[i] > 0]
+                else:
+                    found_columns = [a_tuple[1] for a_tuple in columns_tuples]
+                    all_df_columns = [a_tuple[2] for a_tuple in columns_tuples]                  
+
+                # debug_args.append((missing_columns, found_columns, all_df_columns))
+                # debug_tuple = (missing_columns, found_columns, all_df_columns)
+
+        elif isinstance(dfs, dict):
+            columns_tuples: Dict[str, List[str]] = {key:_subfn_check_and_report(df, required_columns, key) for key, df in dfs.items()} # a dict
+            missing_columns: Dict[str, List[str]] = {key:a_tuple[0] for key, a_tuple in columns_tuples.items()} # a dict
+            # missing_columns: Dict[str, List[str]] = {key:_subfn_check_and_report(df, required_columns, key) for key, df in dfs.items()} # a dict
+            all_have_all_required_columns = all([(not a_missing_columns_list) for key, a_missing_columns_list in missing_columns.items()])
+            if not all_have_all_required_columns:
+                num_missing_columns = {key:len(a_missing_columns_list) for key, a_missing_columns_list in missing_columns.items()}
+                if return_only_dfs_missing_columns:
+                    num_missing_columns = {key:len(a_missing_columns_list) for key, a_missing_columns_list in missing_columns.items() if num_missing_columns[key] > 0}
+                    missing_columns = {key:a_tuple[0] for key, a_tuple in columns_tuples.items() if num_missing_columns[key] > 0}
+                    found_columns = {key:a_tuple[1] for key, a_tuple in columns_tuples.items() if num_missing_columns[key] > 0}
+                    all_df_columns = {key:a_tuple[2] for key, a_tuple in columns_tuples.items() if num_missing_columns[key] > 0}
+                else:
+                    found_columns = {key:a_tuple[1] for key, a_tuple in columns_tuples.items()}
+                    all_df_columns = {key:a_tuple[2] for key, a_tuple in columns_tuples.items()}                
+
+                # debug_args.append((missing_columns, found_columns, all_df_columns))
+
+        if not all_have_all_required_columns:
+            debug_tuple = (num_missing_columns, missing_columns, found_columns, all_df_columns)
+            
+
+        # return columns_tuples, missing_columns, all_have_all_required_columns
+        # return missing_columns, all_have_all_columns
+        # return all_have_all_required_columns, (missing_columns, found_columns, all_df_columns)
+        return all_have_all_required_columns, debug_tuple
+        
+
+
     @classmethod
     def require_columns(cls, dfs: Union[pd.DataFrame, List[pd.DataFrame], Dict[Any, pd.DataFrame]], required_columns: List[str], print_missing_columns: bool = False) -> bool:
         """
@@ -1154,6 +1396,486 @@ class PandasHelpers:
         
         return (added_rows, same_rows, removed_rows)
             
+    @classmethod
+    def swap_columns(cls, potentially_updated_df: pd.DataFrame, lhs_col_name: str, rhs_col_name: str, temp_col_suffix: str = '_temp', debug_print=False) -> pd.DataFrame:
+        """ Returns an empty dataframe with the same columns (and the same dtypes for each column) as `df`
+
+        Usage:
+            
+            from neuropy.utils.indexing_helpers import PandasHelpers
+
+            self.stacked_flat_global_pos_df = PandasHelpers.swap_columns(self.stacked_flat_global_pos_df, lhs_col_name='x', rhs_col_name='y') 
+            self.stacked_flat_global_pos_df = PandasHelpers.swap_columns(self.stacked_flat_global_pos_df, lhs_col_name='x_scaled', rhs_col_name='y_scaled') 
+            
+        
+        """
+        assert lhs_col_name in potentially_updated_df
+        assert rhs_col_name in potentially_updated_df
+        temp_col_name: str = f"{rhs_col_name}{temp_col_suffix}"
+        if debug_print:
+            print(f'temp_col_name: "{temp_col_name}"')
+        assert (temp_col_name not in potentially_updated_df), f"the temporary column name '{temp_col_name}' already exists in the dataframe, so we cannot overwrite it!"
+        ## swap axes:
+        potentially_updated_df[temp_col_name] = deepcopy(potentially_updated_df[rhs_col_name])
+        potentially_updated_df[rhs_col_name] = deepcopy(potentially_updated_df[lhs_col_name])
+        potentially_updated_df[lhs_col_name] = deepcopy(potentially_updated_df[temp_col_name])
+        potentially_updated_df.drop(columns=[temp_col_name], inplace=True)
+        return potentially_updated_df
+
+    @classmethod
+    def remap_range(cls, values, from_range=(0.0, 1.0), to_range=(-1.0, 1.0), safety_check:bool=True):
+        """
+        Maps values from one range to another.
+        
+        Parameters:
+        -----------
+        values : pandas.Series or numpy.ndarray
+            The values to remap
+        from_range : tuple, optional
+            The source range (min, max). Default is (0.0, 1.0)
+        to_range : tuple, optional
+            The target range (min, max). Default is (-1.0, 1.0)
+            
+        Returns:
+        --------
+        pandas.Series or numpy.ndarray
+            The remapped values
+            
+            
+        Usage:
+        
+        
+            from neuropy.utils.indexing_helpers import PandasHelpers
+            
+            # BEGIN FUNCTION BODY ________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________ #
+            # Apply the function to rolling windows
+            rolling_extreme = PandasHelpers.remap_range(df[column], from_range=(0.0, 1.0), to_range=(-1.0, 1.0), safety_check=True).rolling(window, *args, **kwargs).apply(_subfn_most_extreme, raw=False) ## map original probability range to -1, +1 so the `most_extreme` function works correctly
+            # Then get the most extreme value across all windows
+            idx = rolling_extreme.abs().idxmax()
+            return PandasHelpers.remap_range(rolling_extreme.loc[idx], from_range=(-1.0, 1.0), to_range=(0.0, 1.0), safety_check=False) # map back to original probability range 
+                    
+        """
+        from_min, from_max = from_range
+        to_min, to_max = to_range
+
+        # Check if input is within expected range (excluding NaNs)
+        if safety_check:
+            import pandas as pd
+            import numpy as np
+            
+            # Create a mask for non-NaN values
+            if isinstance(values, pd.Series):
+                non_nan_mask = ~values.isna()
+            else:
+                non_nan_mask = ~np.isnan(values)
+                
+            # Check only non-NaN values
+            if non_nan_mask.any():  # Only check if there are any non-NaN values
+                non_nan_values = values[non_nan_mask]
+                if not ((non_nan_values >= from_min) & (non_nan_values <= from_max)).all():
+                    warnings.warn(f"Some values are outside the expected input range {from_range}")
+
+        # Apply the linear transformation
+        # NaNs will automatically propagate through these operations
+        return to_min + (values - from_min) * (to_max - to_min) / (from_max - from_min)
+
+
+
+# ==================================================================================================================== #
+# 2024-11-15 - `neuropy` dataframe helper                                                              #
+# ==================================================================================================================== #
+
+
+class UniqueValuesReturnType(Enum):
+    """Description of the enum class and its purpose."""
+    PLAIN_DICT = auto()
+    IdentifyingContext = auto()
+    # THIRD = auto()
+
+    def __str__(self):
+        return self.name
+
+    @classmethod
+    def list_values(cls):
+        """Returns a list of all enum values"""
+        return list(cls)
+
+    @classmethod
+    def list_names(cls):
+        """Returns a list of all enum names"""
+        return [e.name for e in cls]
+
+
+
+@pd.api.extensions.register_dataframe_accessor("neuropy")
+class NeuroPyDataframeAccessor:
+    """ Describes a dataframe with at least a neuron_id (aclu) column. Provides functionality regarding building globally (across-sessions) unique neuron identifiers.
+    
+
+    from pyphoplacecellanalysis.SpecificResults.AcrossSessionResults import AcrossSessionIdentityDataframeAccessor
+    from neuropy.utils.indexing_helpers import NeuroPyDataframeAccessor
+
+    """
+   
+    def __init__(self, pandas_obj: pd.DataFrame):
+        self._validate(pandas_obj)
+        self._df = pandas_obj
+
+    @staticmethod
+    def _validate(obj):
+        """ verify there is a column that identifies the spike's neuron, the type of cell of this neuron ('neuron_type'), and the timestamp at which each spike occured ('t'||'t_rel_seconds') """
+        if not isinstance(obj, pd.DataFrame):
+            raise ValueError(f"object must be a pandas Dataframe but is of type: {type(obj)}!\nobj: {obj}")
+
+
+    def get_column_unique_values_dict(self, columns_include_subset: Optional[List[str]]=None) -> Dict[str, List]:
+        """ Returns a dict containing the column names as keys and a list of the unique values of that column as the values.
+
+        Usage:
+            from neuropy.utils.indexing_helpers import NeuroPyDataframeAccessor
+            
+            unique_values_dict = df.neuropy.get_column_unique_values_dict(columns_include_subset=['known_named_decoding_epochs_type', 'trained_compute_epochs', 'masked_time_bin_fill_type'])
+            unique_values_dict
+
+            {'custom_replay_name': ['withNormalComputedReplays-qclu_[1, 2, 4, 6, 7, 8, 9]-frateThresh_5.0',
+              'withNormalComputedReplays-qclu_[1, 2, 4, 6, 7, 9]-frateThresh_5.0',
+              'withNormalComputedReplays-qclu_[1, 2]-frateThresh_5.0',
+              ''],
+             'included_qclu_values': ['[1, 2, 4, 6, 7, 8, 9]',
+              '[1, 2, 4, 6, 7, 9]',
+              '[1, 2]',
+              nan],
+             'minimum_inclusion_fr_Hz': [5.0, nan],
+             'time_bin_size': [0.025, 0.05, 1.5]}
+
+        """
+        if columns_include_subset is None:
+            columns_include_subset = list(self._df.columns) ## consider all columns        
+        # unique_values_dict = {a_col_name:np.unique(self._df[a_col_name]).tolist() for a_col_name in columns_include_subset}
+        
+        unique_values_dict = {}
+        for a_col_name in columns_include_subset:
+            if self._df[a_col_name].dtype == 'object':
+                # Use pandas unique for object dtypes, this prevents strange errors like `TypeError: '<' not supported between instances of 'str' and 'float'` when the column contains None values or something.
+                unique_values_dict[a_col_name] = self._df[a_col_name].unique().tolist()
+            else:
+                # Use numpy unique for numeric dtypes
+                unique_values_dict[a_col_name] = np.unique(self._df[a_col_name]).tolist()
+                
+        
+        return unique_values_dict
+    
+
+    def get_flat_unique_values(self, columns_include_subset: List[str], return_format: UniqueValuesReturnType=UniqueValuesReturnType.IdentifyingContext) -> List[Tuple]:
+        """ Returns a list of unique value combinations from the specified columns.
+
+        Args:
+            columns_subset: List of column names to find unique combinations for
+
+        Returns:
+            List of tuples, where each tuple represents a unique combination of values
+
+        Example:
+            from neuropy.utils.indexing_helpers import NeuroPyDataframeAccessor, UniqueValuesReturnType
+            from neuropy.utils.result_context import IdentifyingContext
+
+
+            # For a dataframe with:
+            # pd.DataFrame({'session_name': ['s0', 's1', 's2'], 'animal': ['a0', 'a0', 'a1']})
+
+            # Get unique combinations
+            unique_values_dict = FAT_df.neuropy.get_flat_unique_values(columns_include_subset=['custom_replay_name', 'included_qclu_values', 'minimum_inclusion_fr_Hz', 'time_bin_size']) # , 'masked_time_bin_fill_type'
+            unique_values_dict
+
+            {Context(custom_replay_name= 'withNormalComputedReplays-qclu_[1, 2, 4, 6, 7, 8, 9]-frateThresh_5.0', included_qclu_values= '[1, 2, 4, 6, 7, 8, 9]', minimum_inclusion_fr_Hz= 5.0, time_bin_size= 0.05): 2355955,
+             Context(custom_replay_name= 'withNormalComputedReplays-qclu_[1, 2]-frateThresh_5.0', included_qclu_values= '[1, 2]', minimum_inclusion_fr_Hz= 5.0, time_bin_size= 0.05): 2291178,
+             Context(custom_replay_name= 'withNormalComputedReplays-qclu_[1, 2, 4, 6, 7, 9]-frateThresh_5.0', included_qclu_values= '[1, 2, 4, 6, 7, 9]', minimum_inclusion_fr_Hz= 5.0, time_bin_size= 0.05): 998617,
+             Context(custom_replay_name= 'withNormalComputedReplays-qclu_[1, 2, 4, 6, 7, 9]-frateThresh_5.0', included_qclu_values= '[1, 2, 4, 6, 7, 9]', minimum_inclusion_fr_Hz= 5.0, time_bin_size= 0.025): 633693}
+
+
+        """
+        from neuropy.utils.result_context import IdentifyingContext
+
+        # Validate columns exist
+        for column in columns_include_subset:
+            if column not in self._df.columns:
+                raise ValueError(f"Column '{column}' not found in dataframe")
+
+        # # Use drop_duplicates to get unique combinations
+        # unique_df = self._df[columns_include_subset].drop_duplicates()
+
+        # # Convert to list of tuples
+        # return [tuple(row) for row in unique_df.to_numpy()]
+
+        # Use value_counts to get counts of unique combinations
+        value_counts = self._df[columns_include_subset].value_counts()
+
+        # Convert to dictionary with dictionary keys (column_name: value)
+        result = {}
+        for idx, count in zip(value_counts.index, value_counts.values):
+            # Create a dictionary for this combination
+            combo_dict = {col: val for col, val in zip(columns_include_subset, idx)}
+            if return_format.value == UniqueValuesReturnType.IdentifyingContext.value:
+                combo_dict = IdentifyingContext.init_from_dict(combo_dict)
+            elif return_format.value == UniqueValuesReturnType.PLAIN_DICT.value:
+                pass ## already a plain-dict
+            else:
+                raise NotImplementedError(f'return_format: "{return_format}" is unknown.')
+
+
+            # combo_dict = IdentifyingContext.init_from_dict({col: val for col, val in zip(columns_include_subset, idx)})
+            result[combo_dict] = count  # Use IdentifyingContext to make the dictionary hashable
+
+        return result
+
+
+    def get_hierarchical_counts(self, columns_include_subset: List[str]) -> Dict:
+        """ Returns a nested dictionary showing hierarchical grouping of rows by the specified columns.
+
+        Each level of the dictionary represents grouping by one column, with counts at the leaf nodes.
+        This implementation uses pandas' optimized groupby operations for better performance.
+
+        Args:
+            columns_include_subset: List of column names to group hierarchically
+
+        Returns:
+            Nested dictionary where each level corresponds to a column, and leaf values are row counts
+
+
+        Example:
+
+            unique_values_dict = FAT_df.neuropy.get_hierarchical_counts(columns_include_subset=['custom_replay_name', 'included_qclu_values', 'minimum_inclusion_fr_Hz', 'time_bin_size']) # , 'masked_time_bin_fill_type'
+            unique_values_dict
+
+            {'withNormalComputedReplays-qclu_[1, 2, 4, 6, 7, 8, 9]-frateThresh_5.0': {'[1, 2, 4, 6, 7, 8, 9]': {5.0: {0.05: 2355955}}},
+                'withNormalComputedReplays-qclu_[1, 2, 4, 6, 7, 9]-frateThresh_5.0': {'[1, 2, 4, 6, 7, 9]': {5.0: {0.025: 633693,
+                0.05: 998617}}},
+                'withNormalComputedReplays-qclu_[1, 2]-frateThresh_5.0': {'[1, 2]': {5.0: {0.05: 2291178}}}}
+
+
+        """
+        # Validate columns exist
+        for column in columns_include_subset:
+            if column not in self._df.columns:
+                raise ValueError(f"Column '{column}' not found in dataframe")
+
+        # Group by all columns at once and count
+        grouped_counts = self._df.groupby(columns_include_subset).size()
+
+        # Convert the hierarchical Series to a nested dictionary
+        def series_to_dict(series):
+            result = {}
+            for idx, value in series.items():
+                d = result
+                # For tuple index, navigate through the hierarchy
+                if isinstance(idx, tuple):
+                    for key in idx[:-1]:
+                        if key not in d:
+                            d[key] = {}
+                        d = d[key]
+                    d[idx[-1]] = value
+                else:
+                    # For single-level index
+                    result[idx] = value
+            return result
+
+        # Handle both single-level and multi-level indices
+        if isinstance(grouped_counts.index, pd.MultiIndex):
+            return series_to_dict(grouped_counts)
+        else:
+            # For single column case
+            return grouped_counts.to_dict()
+
+
+
+    def dropping_single_valued_columns(self, include_subset: Optional[List[str]]=None) -> pd.DataFrame:
+        """ Returns a copy of the dataframe with any columns containing only a single value dropped.
+        
+        from neuropy.utils.indexing_helpers import NeuroPyDataframeAccessor
+        
+        filtered_single_FAT_df: pd.DataFrame = single_FAT_df.neuropy.constrain_df_cols(data_grain='per_time_bin', decoder_identifier='pseudo2D', masked_time_bin_fill_type=['ignore'], trained_compute_epochs='laps', known_named_decoding_epochs_type=['laps']) # long_RL=0, short_LR=0, short_RL=0
+        filtered_single_FAT_df
+
+        """
+        _out_df: pd.DataFrame = deepcopy(self._df)
+        if include_subset is None:
+            include_subset = list(_out_df.columns) ## consider all columns
+
+        # _column_names_to_drop = []  
+        _columns_to_drop_dict = {}            
+        for a_col_name in include_subset:        
+            a_col_unique_values = np.unique(_out_df[a_col_name])
+            if len(a_col_unique_values) < 2:
+                ## only one or zero unique values, drop the column
+                _columns_to_drop_dict[a_col_name] = a_col_unique_values
+        ## end for a_col...
+        _column_names_to_drop = list(_columns_to_drop_dict.keys())
+        if len(_column_names_to_drop) > 0:
+            ## perform the drop
+            ## only drop columns when the value was constrained to a single value
+            _out_df.drop(columns=_column_names_to_drop, inplace=True)   
+        # END if len(_column_names_to_dr....
+        return _out_df
+    
+
+
+    def constrain_df_cols(self, should_drop_constrained_columns: bool=True, **constraining_kwargs) -> pd.DataFrame:
+        """ 
+        from neuropy.utils.indexing_helpers import NeuroPyDataframeAccessor
+        
+        filtered_single_FAT_df: pd.DataFrame = single_FAT_df.neuropy.constrain_df_cols(data_grain='per_time_bin', decoder_identifier='pseudo2D', masked_time_bin_fill_type=['ignore'], trained_compute_epochs='laps', known_named_decoding_epochs_type=['laps']) # long_RL=0, short_LR=0, short_RL=0
+        filtered_single_FAT_df
+
+        """
+        _out_df: pd.DataFrame = deepcopy(self._df)
+        for col_name, val in constraining_kwargs.items():
+            if isinstance(val, (list, tuple, set)):
+                _out_df = _out_df[_out_df[col_name].isin(val)]
+            else:
+                _out_df = _out_df[_out_df[col_name] == val]
+                if should_drop_constrained_columns:
+                    ## only drop columns when the value was constrained to a single value
+                    _out_df.drop(columns=[col_name], inplace=True)
+                    
+        # END for col_...
+        return _out_df
+
+
+    def split_session_key_col_to_fmt_animal_exper_cols(self, session_key_col: str = 'session_name') -> pd.DataFrame:
+        """ Split 'session_name' to the individual columns:
+            adds columns ['format_name', 'animal', 'exper_name', 'session_name'] based on 'session_name'
+            
+            Usage: 
+                from neuropy.utils.indexing_helpers import NeuroPyDataframeAccessor
+                
+                df = df.neuropy.split_session_key_col_to_fmt_animal_exper_cols(session_key_col='session_name')
+            
+        """
+        df: pd.DataFrame = deepcopy(self._df)
+        _added_columns = []
+        if session_key_col in df:
+            if 'format_name' not in df.columns:
+                df['format_name'] = df[session_key_col].map(lambda x: x.split('_', maxsplit=3)[0]) ## add animal name
+            if 'animal' not in df.columns:
+                df['animal'] = df[session_key_col].map(lambda x: x.split('_', maxsplit=3)[1]) ## add animal name
+                ## strip the '01' suffix from each
+            if 'exper_name' not in df.columns:
+                df['exper_name'] = df[session_key_col].map(lambda x: x.split('_', maxsplit=3)[2]) # not needed
+            if (('session_name' not in df.columns) and ('session_name' != session_key_col)):
+                df['session_name'] = df[session_key_col].map(lambda x: x.split('_', maxsplit=3)[-1]) # not needed
+                
+        return df
+
+
+    def detect_epoch_satisfying_condition(self, is_condition_satisfied: NDArray,  minimum_epoch_duration: Optional[float] = None, merging_adjacent_max_separation_sec: Optional[float] = None, time_col_name: str = 't',
+                                            drop_epochs_overlapping_start_end: bool=False, debug_print: bool=False):
+        """
+        Returns an Epochs objects describe time frames where a certain condition is satisfied, for example the animal is above a certain speed
+
+        Usage:        
+            speed_col_name: str ='speed'
+            minimum_run_speed: float = 10.0
+            
+            a_pos_df: pd.DataFrame = self._obj
+            movement_speed_variable = a_pos_df[speed_col_name].abs().values
+            a_pos_df.neuropy.detect_epoch_satisfying_condition(is_condition_satisfied = (movement_speed_variable > minimum_run_speed))
+            
+        """
+        from neuropy.core.epoch import Epoch, EpochsAccessor
+    
+        is_condition_satisfied = np.asarray(is_condition_satisfied).astype(bool)
+        if is_condition_satisfied.size == 0:
+            return pd.DataFrame(columns=['start', 'stop', 'start_position_index', 'stop_position_index', 'label'])
+        
+        rising_edges = np.where(np.diff(is_condition_satisfied.astype(int)) == 1)[0] + 1
+        falling_edges = np.where(np.diff(is_condition_satisfied.astype(int)) == -1)[0] + 1
+
+        # handle boundary conditions: if condition starts True, an initial rising at index 0 is implied
+        # decide behavior based on drop_epochs_overlapping_start_end: bool
+        if drop_epochs_overlapping_start_end:
+            # drop partial epochs that overlap recording boundaries
+            if is_condition_satisfied[0]:
+                ## drop first falling_edge
+                if len(falling_edges) == (len(rising_edges) + 1):
+                    ## remove the extra falling edge
+                    falling_edges = falling_edges[1:]
+                    if debug_print:
+                        print(f'dropped 1 falling_edges')
+                assert len(falling_edges) == len(rising_edges), f'ERROR: rising_edges: {rising_edges}\nfalling_edges: {falling_edges}'
+            if is_condition_satisfied[-1]:
+                ## drop last rising_edge
+                if len(rising_edges) == (len(falling_edges) + 1):
+                    ## remove the extra rising edge
+                    rising_edges = rising_edges[:-1]
+                    if debug_print:
+                        print(f'dropped 1 rising_edges')
+                assert len(rising_edges) == len(falling_edges), f'ERROR: rising_edges: {rising_edges}\nfalling_edges: {falling_edges}'
+        else:
+            # include partial epochs by padding to the recording boundaries
+            if is_condition_satisfied[0]:
+                # rising_edges = np.concatenate(([0], rising_edges)) if rising_edges.size else np.array([0], dtype=int)
+                ## add initial rising edge
+                rising_edges = np.concatenate(([0], rising_edges)) if rising_edges.size else np.array([0], dtype=int)
+                if debug_print:
+                    print(f'adding one 1 rising_edges')
+            if is_condition_satisfied[-1]:
+                # falling_edges = np.concatenate((falling_edges, [is_condition_satisfied.size])) if falling_edges.size else np.array([is_condition_satisfied.size], dtype=int)
+                ## add final falling edge one-past-last
+                falling_edges = np.concatenate((falling_edges, [is_condition_satisfied.size])) if falling_edges.size else np.array([is_condition_satisfied.size], dtype=int)
+                if debug_print:
+                    print(f'adding one 1 falling_edges')
+
+
+        assert len(rising_edges) == len(falling_edges), f"even after correction, len(rising_edges) != len(falling_edges)\n\tlen(rising_edges): {len(rising_edges)}, len(falling_edges): {len(falling_edges)}"
+        # 2) each rising must occur before the corresponding falling (falling is index of first-False -> falling-1 is last True)
+        assert np.all(rising_edges <= falling_edges - 1), f"some rising_edges > falling_edges-1 (invalid intervals): rising_edges={rising_edges}, falling_edges={falling_edges}"
+
+        # Verify that is_condition_satisfied size matches dataframe size
+        if is_condition_satisfied.size != len(self._df):
+            raise ValueError(f"is_condition_satisfied size ({is_condition_satisfied.size}) must match dataframe length ({len(self._df)})")
+        
+        # Clamp indices to valid range for .iloc[] indexing (handle one-past-the-end case)
+        # falling_edges can contain is_condition_satisfied.size (one-past-the-end), which needs clamping
+        # rising_edges should be valid, but clamp defensively
+        max_valid_idx = len(self._df) - 1
+        rising_edges_clamped = np.clip(rising_edges, 0, max_valid_idx)
+        falling_edges_clamped = np.clip(falling_edges, 0, max_valid_idx)
+        
+        # (rising_edges, falling_edges)
+        # Ensure arrays remain 1D (np.squeeze can turn 1-element arrays into scalars)
+        start_times = self._df[time_col_name].iloc[rising_edges_clamped].to_numpy()
+        stop_times = self._df[time_col_name].iloc[falling_edges_clamped].to_numpy()
+        # Ensure 1D arrays (handle case where single element might become scalar)
+        start_times = np.atleast_1d(start_times)
+        stop_times = np.atleast_1d(stop_times)
+        satisfied_epochs_df: pd.DataFrame = pd.DataFrame(dict(zip(['start', 'stop'], [start_times, stop_times])))
+        assert len(rising_edges) == len(satisfied_epochs_df)
+        assert len(falling_edges) == len(satisfied_epochs_df)
+        
+        satisfied_epochs_df['start_position_index'] = rising_edges
+        satisfied_epochs_df['stop_position_index'] = falling_edges    
+        satisfied_epochs_df['label'] = satisfied_epochs_df.index.astype(str)
+        # satisfied_epochs_df = satisfied_epochs_df.epochs.rebuild_labels_column()
+        
+        # lap_epochs: Epoch = Epoch.init_from_start_stops_df(satisfied_epochs_df)
+        # satisfied_epochs_df = lap_epochs.to_dataframe().epochs.get_valid_df() ## why do we even do this?
+        if merging_adjacent_max_separation_sec is not None:
+            satisfied_epochs_df = satisfied_epochs_df.epochs.get_valid_df().epochs.merge_adjacent_epochs_within(max_merge_duration=merging_adjacent_max_separation_sec) ## Loses other columns!
+        if minimum_epoch_duration is not None:
+            satisfied_epochs_df = satisfied_epochs_df.epochs.get_epochs_longer_than(minimum_duration=minimum_epoch_duration)
+        if merging_adjacent_max_separation_sec is not None:
+            satisfied_epochs_df = satisfied_epochs_df.epochs.get_valid_df().epochs.merge_adjacent_epochs_within(max_merge_duration=merging_adjacent_max_separation_sec) ## Loses other columns!
+            
+        satisfied_epochs_df = satisfied_epochs_df.epochs.rebuild_labels_column()
+        # assert 'start_position_index' in satisfied_epochs_df
+        return satisfied_epochs_df
+
+
+
+
+
+
+
         
 class ColumnTracker(ContextDecorator):
     """A context manager to track changes in the columns of DataFrames.

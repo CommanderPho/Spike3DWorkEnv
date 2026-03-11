@@ -1,4 +1,5 @@
 from typing import Optional, List, Dict, Tuple, Union
+import nptyping as ND
 from nptyping import NDArray
 import numpy as np
 import pandas as pd
@@ -49,10 +50,35 @@ def compute_placefield_center_of_mass_positions(tuning_curves: NDArray, xbin: ND
     
     if ybin is not None:
         # 2D Case
-        assert np.ndim(tuning_curves) == 2, f"{np.shape(tuning_curves)} is not 2D?"
-        tuning_curve_x_CoM_positions = _subfn_interpolate_coord_indicies_to_positions_1D(np.squeeze(tuning_curve_CoM_coordinates[:, 0]), xbin) # in position space
-        tuning_curve_y_CoM_positions = _subfn_interpolate_coord_indicies_to_positions_1D(np.squeeze(tuning_curve_CoM_coordinates[:, 1]), ybin)
-        tuning_curve_CoM_positions = np.stack((tuning_curve_x_CoM_positions, tuning_curve_y_CoM_positions), axis=-1) # (79, 2)
+        tuning_curves_ndim: int = np.ndim(tuning_curves)
+        # assert np.ndim(tuning_curves) == 2, f"{np.shape(tuning_curves)} is not 2D?"
+        if tuning_curves_ndim == 2:
+            # 2D Case
+            tuning_curve_x_CoM_positions = _subfn_interpolate_coord_indicies_to_positions_1D(np.squeeze(tuning_curve_CoM_coordinates[:, 0]), xbin) # in position space
+            tuning_curve_y_CoM_positions = _subfn_interpolate_coord_indicies_to_positions_1D(np.squeeze(tuning_curve_CoM_coordinates[:, 1]), ybin)
+            tuning_curve_CoM_positions = np.stack((tuning_curve_x_CoM_positions, tuning_curve_y_CoM_positions), axis=-1) # (79, 2)
+        elif tuning_curves_ndim == 3:
+            ## 3D Case
+            n_aclus, n_pos_bins, n_decoders = np.shape(tuning_curves)
+            # tuning_curves_most_likely_pos = np.nanmax(tuning_curves, axis=-1) ## last axis, should be 2D now
+            # assert np.ndim(tuning_curves_most_likely_pos) == 2, f"{np.shape(tuning_curves_most_likely_pos)} is not 2D?"
+            tuning_curve_CoM_coordinates = compute_placefield_center_of_mass_coord_indicies(tuning_curves) # (44,)
+            tuning_curve_x_CoM_positions = _subfn_interpolate_coord_indicies_to_positions_1D(np.squeeze(tuning_curve_CoM_coordinates[:, 0]), xbin) # in position space
+            tuning_curve_y_CoM_positions = _subfn_interpolate_coord_indicies_to_positions_1D(np.squeeze(tuning_curve_CoM_coordinates[:, 1]), ybin)
+            tuning_curve_CoM_positions = np.stack((tuning_curve_x_CoM_positions, tuning_curve_y_CoM_positions), axis=-1) # (79, 2) 
+            ## Each 1D decoder separately:
+            # out_CoM_pos_arr = []
+            # for i in np.arange(n_decoders):
+            #     ## 1D Position:
+            #     tuning_curve_CoM_coordinates = compute_placefield_center_of_mass_coord_indicies(np.squeeze(tuning_curves[:, :, i])) # (44,)
+            #     tuning_curve_CoM_positions = _subfn_interpolate_coord_indicies_to_positions_1D(tuning_curve_CoM_coordinates, xbin) # 1D in position space
+            #     out_CoM_pos_arr.append(tuning_curve_CoM_positions)
+            
+            # tuning_curve_CoM_positions = np.stack(out_CoM_pos_arr, axis=-1) # (44, 4) 
+
+
+        else:
+            raise ValueError(f'{np.shape(tuning_curves)} is not 2D or 3D?')
             
     else:
         # 1D Case
@@ -94,6 +120,9 @@ class ContinuousPeakLocationRepresentingMixin:
     """ Implementors provides peaks in position-space (e.g. a location on the maze) which are computed from a `ContinuousPeakLocationRepresentingMixin_peak_curves_variable` it provides, such as the turning curves.
         
     from neuropy.utils.mixins.peak_location_representing import ContinuousPeakLocationRepresentingMixin
+    Uses:
+        .pdf_normalized_tuning_curves
+        
     
     Provides:
         peak_tuning_curve_center_of_mass_bin_coordinates
@@ -116,7 +145,6 @@ class ContinuousPeakLocationRepresentingMixin:
         return compute_placefield_center_of_mass_positions(self.ContinuousPeakLocationRepresentingMixin_peak_curves_variable, xbin=self.xbin, ybin=self.ybin)
     
                 
-
 
     def get_tuning_curve_peaks_all_info_dict(self, peak_mode='peaks', enable_sort_subpeaks_by_peak_heights: bool = True, **find_peaks_kwargs) -> Dict:
         """ returns the peaks in coordinate bin space 
@@ -246,6 +274,7 @@ class ContinuousPeakLocationRepresentingMixin:
         else:
             raise NotImplementedError(f"Unknown peak_mode: '{peak_mode}' specified. Known modes: ['CoM', 'peaks']")
     
+
     @classmethod
     def peaks_dict_to_df(cls, peaks_dict: Dict, peaks_results_dict: Dict) -> pd.DataFrame:
         # peaks_dict, peaks_results_dict

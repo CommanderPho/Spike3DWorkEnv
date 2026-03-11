@@ -158,14 +158,30 @@ class NeuronIdentityDataframeAccessor:
     # Additive Mutating Functions: Adds or Update Columns in the Dataframe                                                 #
     # ==================================================================================================================== #
     
+
     @classmethod
-    def _add_global_uid(cls, neuron_indexed_df: pd.DataFrame, session_context: "IdentifyingContext") -> pd.DataFrame:
+    def _get_session_global_uid(cls, session_context: "IdentifyingContext") -> str:
+        """ gets the globally unique (to this session) session identifier that can be used as 'session_uid' and to form 'neuron_uid'
+        
+        Suitable for use like `neuron_indexed_df['neuron_uid'] = session_uid + "|" + neuron_indexed_df['aclu'].astype(str)`
+        """
+        session_uid: str = session_context.get_description(separator="|", include_property_names=False)
+        return session_uid
+
+    
+    @classmethod
+    def _add_global_uid(cls, neuron_indexed_df: pd.DataFrame, session_context: "IdentifyingContext", force_overwrite: bool=False) -> pd.DataFrame:
         """ adds the ['session_uid', 'neuron_uid'] columns to the dataframe. """
         assert 'aclu' in neuron_indexed_df.columns
         session_uid: str = session_context.get_description(separator="|", include_property_names=False)
-        neuron_indexed_df['session_uid'] = session_uid  # Provide an appropriate session identifier here
-        neuron_indexed_df['neuron_uid'] = neuron_indexed_df.apply(lambda row: f"{session_uid}|{str(row['aclu'])}", axis=1) 
+        if ('session_uid' not in neuron_indexed_df.columns) or force_overwrite:
+            neuron_indexed_df['session_uid'] = session_uid  # Provide an appropriate session identifier here
+        if ('neuron_uid' not in neuron_indexed_df.columns) or force_overwrite:
+            # neuron_indexed_df['neuron_uid'] = neuron_indexed_df.apply(lambda row: f"{session_uid}|{str(row['aclu'])}", axis=1) 
+            neuron_indexed_df['neuron_uid'] = session_uid + "|" + neuron_indexed_df['aclu'].astype(str) # Vectorized string concatenation - much faster than apply()
+
         return neuron_indexed_df
+
 
 
     def make_neuron_indexed_df_global(self, curr_session_context: "IdentifyingContext", add_expanded_session_context_keys:bool=False, add_extended_aclu_identity_columns:bool=False, inplace:bool=False) -> pd.DataFrame:
@@ -209,7 +225,7 @@ class NeuronIdentityDataframeAccessor:
         # Reordering the columns to place the new columns on the left
         # result_df = result_df[['format_name', 'animal', 'exper_name', 'session_name', 'aclu', 'shank', 'cluster', 'qclu', 'neuron_type', 'active_set_membership', 'lap_delta_minus', 'lap_delta_plus', 'replay_delta_minus', 'replay_delta_plus']]
         if curr_session_context is not None:
-            result_df = self._add_global_uid(neuron_indexed_df=result_df, session_context=curr_session_context)
+            result_df = self._add_global_uid(neuron_indexed_df=result_df, session_context=curr_session_context) ## this is actually moderately slow, e.g. a few seconds
 
         return result_df
 
@@ -721,7 +737,12 @@ class NeuronType(HDFConvertableEnum, Enum):
                 if len(itemindex[0]) < 1:
                     # if not found in bapunNpyFileStyleShortClassNames, try hdf_coding_ClassNames
                     itemindex = np.where(cls.hdf_coding_ClassNames()==string_value)
-
+                    if len(itemindex[0]) < 1:
+                        # if not found in hdf_coding_ClassNames, try last dicth error correction for Bapun session's ('1' strings)
+                        known_error_neuron_types_dict = {'1': 1, }
+                        itemindex = [known_error_neuron_types_dict.get(string_value, None)] # np.where(cls.hdf_coding_ClassNames()==string_value)
+                        if itemindex[0] is None:
+                            raise NotImplementedError(f'unhandled neuron type: string_value: "{string_value}" could not be detected to be of any known format.')
         return NeuronType(itemindex[0])
 
     @classmethod

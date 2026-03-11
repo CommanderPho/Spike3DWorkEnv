@@ -15,7 +15,7 @@ from neuropy.utils.misc import safe_pandas_get_group, copy_if_not_none
 ## Need to apply position binning to the spikes_df's position columns to find the bins they fall in:
 from neuropy.utils.mixins.binning_helpers import build_df_discretized_binned_position_columns # for perform_time_range_computation only
 from neuropy.utils.mixins.unit_slicing import NeuronUnitSlicableObjectProtocol # allows placefields to be sliced by neuron ids
-
+from neuropy.utils.mixins.binning_helpers import DebugBinningInfo
 from neuropy.utils.mixins.AttrsClassHelpers import AttrsBasedClassHelperMixin, serialized_field, serialized_attribute_field, non_serialized_field, custom_define
 from neuropy.utils.mixins.HDF5_representable import HDF_DeserializationMixin, post_deserialize, HDF_SerializationMixin, HDFMixin
 
@@ -23,6 +23,8 @@ from typing import Dict, OrderedDict, List, Tuple, Optional, Callable, Union, An
 from typing_extensions import TypeAlias
 from typing import NewType
 import neuropy.utils.type_aliases as types
+import nptyping as ND
+from nptyping import NDArray
 
 SnapshotTimestamp = NewType('SnapshotTimestamp', float)
 
@@ -254,13 +256,15 @@ class PfND_TimeDependent(PfND):
         # return Ratemap(self.curr_occupancy_weighted_tuning_maps_matrix, spikes_maps=self.curr_spikes_maps_matrix, xbin=self.xbin, ybin=self.ybin, neuron_ids=self.included_neuron_IDs, occupancy=self.curr_seconds_occupancy, neuron_extended_ids=self.frate_filter_fcn(self.all_time_filtered_spikes_df.spikes.neuron_probe_tuple_ids))
         # DO I need neuron_ids=self.frate_filter_fcn(self.included_neuron_IDs)?
         return Ratemap(self.curr_occupancy_weighted_tuning_maps_matrix[self._included_thresh_neurons_indx], spikes_maps=self.curr_spikes_maps_matrix[self._included_thresh_neurons_indx],
-                       xbin=self.xbin, ybin=self.ybin, neuron_ids=self.included_neuron_IDs, occupancy=self.curr_seconds_occupancy, neuron_extended_ids=self.frate_filter_fcn(self.all_time_filtered_spikes_df.spikes.neuron_probe_tuple_ids))
+                       xbin=self.xbin, ybin=self.ybin, zbin=self.zbin,
+                       neuron_ids=self.included_neuron_IDs, occupancy=self.curr_seconds_occupancy, neuron_extended_ids=self.frate_filter_fcn(self.all_time_filtered_spikes_df.spikes.neuron_probe_tuple_ids),
+                       )
 
         ## Passes self.included_neuron_IDs explicitly
 
 
     def __repr__(self):
-        return f'{self.__class__.__qualname__.rsplit(">.", 1)[-1]}(spikes_df={self.spikes_df!r}, position={self.position!r}, epochs={self.epochs!r}, config={self.config!r}, position_srate={self.position_srate!r}, setup_on_init={self.setup_on_init!r}, compute_on_init={self.compute_on_init!r}, _save_intermediate_spikes_maps={self._save_intermediate_spikes_maps!r}, _included_thresh_neurons_indx={self._included_thresh_neurons_indx!r}, _peak_frate_filter_function={self._peak_frate_filter_function!r}, ratemap={self.ratemap!r}, _filtered_pos_df={self._filtered_pos_df!r}, _filtered_spikes_df={self._filtered_spikes_df!r}, ndim={self.ndim!r}, xbin={self.xbin!r}, ybin={self.ybin!r}, bin_info={self.bin_info!r})'
+        return f'{self.__class__.__qualname__.rsplit(">.", 1)[-1]}(spikes_df={self.spikes_df!r}, position={self.position!r}, epochs={self.epochs!r}, config={self.config!r}, position_srate={self.position_srate!r}, setup_on_init={self.setup_on_init!r}, compute_on_init={self.compute_on_init!r}, _save_intermediate_spikes_maps={self._save_intermediate_spikes_maps!r}, _included_thresh_neurons_indx={self._included_thresh_neurons_indx!r}, _peak_frate_filter_function={self._peak_frate_filter_function!r}, ratemap={self.ratemap!r}, _filtered_pos_df={self._filtered_pos_df!r}, _filtered_spikes_df={self._filtered_spikes_df!r}, ndim={self.ndim!r}, xbin={self.xbin!r}, ybin={self.ybin!r}, zbin={self.zbin!r}, bin_info={self.bin_info!r})'
     
   
     # ==================================================================================================================== #
@@ -283,6 +287,12 @@ class PfND_TimeDependent(PfND):
                 if 'binned_y' not in self._filtered_spikes_df:
                     self._filtered_spikes_df['binned_y'] = pd.cut(self._filtered_spikes_df['y'].to_numpy(), bins=self.ybin, include_lowest=True, labels=self.ybin_labels)
     
+            if (self.ndim > 2):
+                self._filtered_spikes_df['z'] = np.interp(self._filtered_spikes_df[self.spikes_df.spikes.time_variable_name].to_numpy(), self.t, self.z)
+                if 'binned_z' not in self._filtered_spikes_df:
+                    self._filtered_spikes_df['binned_z'] = pd.cut(self._filtered_spikes_df['z'].to_numpy(), bins=self.zbin, include_lowest=True, labels=self.zbin_labels)
+    
+
             self._setup_time_varying()
             if self.compute_on_init:
                 # Ignore self.compute() for time varying
@@ -368,11 +378,13 @@ class PfND_TimeDependent(PfND):
                     self.snapshot()
                     
 
-    def batch_snapshotting(self, combined_records_list, reset_at_start:bool = True, debug_print=False) -> Dict[SnapshotTimestamp, PlacefieldSnapshot]:
+    def batch_snapshotting(self, combined_records_list, reset_at_start:bool = True, is_start_relative_t:bool=True, debug_print=False) -> Dict[SnapshotTimestamp, PlacefieldSnapshot]:
         """ Updates sequentially, snapshotting each time.
 
         combined_records_list: can be an Epoch object, a epoch-formatted pd.DataFrame, or a series of tuples to convert into combined_records_list
 
+        is_start_relative_t: If True, combined_records_list is assumed to have all times defined relative to the earliest first valid time, meaning the snapshot `t` will be `t < - t0 + t`
+        
         Usage:
             laps_df = deepcopy(global_any_laps_epochs_obj.to_dataframe())
             laps_df['epoch_type'] = 'lap'
@@ -396,13 +408,13 @@ class PfND_TimeDependent(PfND):
 
         # Tuples list:
         initial_start_t = float(combined_records_list[0][1])
-        self.update(t=initial_start_t, start_relative_t=True, should_snapshot=True)
+        self.update(t=initial_start_t, start_relative_t=is_start_relative_t, should_snapshot=True)
 
         ## Use the combined records list (which is a list of tuples) to update the self:
         for epoch_type, start_t, stop_t, item_id in combined_records_list: ## tuple list
             if debug_print:
                 print(f'{epoch_type}, start_t: {start_t}, stop_t: {stop_t}, item_id: {item_id}')
-            self.update(t=float(stop_t), start_relative_t=True, should_snapshot=True) # advance the self to the current start time
+            self.update(t=float(stop_t), start_relative_t=is_start_relative_t, should_snapshot=True) # advance the self to the current start time
         if debug_print:
             print(f'done.')
         
@@ -990,6 +1002,75 @@ class PfND_TimeDependent(PfND):
         
 
 
+    # @function_attributes(short_name=None, tags=['stability', 'aclu', 'placefields', 'field-formation'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2025-08-15 18:29', related_items=[])
+    @classmethod
+    def find_aclu_stabilizing_times(cls, _a_pf1D_dt_snapshots, included_neuron_IDs: NDArray, fr_threshold_Hz: float = 2.0):
+        """take `_a_pf1D_dt_snapshots` and find when each cell exceecds its required fr threshold 
+
+            ## Find the snapshot where the occupancy normalized firing map first met the threshold for pf inclusion
+            
+            
+        Usage:
+        
+            from neuropy.core.epoch import EpochHelpers, ensure_dataframe
+            from neuropy.analyses.time_dependent_placefields import PfND_TimeDependent
+
+            ## INPUTS: long_LR_epochs_obj, long_LR_results
+
+            a_pf1D_dt: PfND_TimeDependent = deepcopy(long_LR_results.pf1D_dt)
+            a_pf2D_dt: PfND_TimeDependent = deepcopy(long_LR_results.pf2D_dt)
+
+            df: pd.DataFrame = ensure_dataframe(deepcopy(long_LR_epochs_obj)) 
+            df['epoch_type'] = 'lap'
+            df['interval_type_id'] = 666
+
+            subdivide_bin_size = 0.050 # Specify the size of each sub-epoch in seconds
+            subdiv_df: pd.DataFrame = EpochHelpers.subdivide_epochs(df, subdivide_bin_size)
+
+            ## Evolve the ratemaps:
+            _a_pf1D_dt_snapshots = a_pf1D_dt.batch_snapshotting(subdiv_df, reset_at_start=True)
+            
+            included_neuron_IDs = deepcopy(a_pf1D_dt.included_neuron_IDs)
+            (aclu_first_firing_snapshot_duration_fraction, aclu_first_firing_snapshot_timestep, aclu_first_firing_snapshot_idx) = PfND_TimeDependent.find_aclu_stabilizing_times(_a_pf1D_dt_snapshots=_a_pf1D_dt_snapshots, included_neuron_IDs=included_neuron_IDs)
+            aclu_first_firing_snapshot_duration_fraction
+
+
+        """
+        # a_pf1D_dt.neuron_extended_ids
+        snapshot_timestamps: NDArray = np.array(list(_a_pf1D_dt_snapshots.keys())) # (2879,)
+        total_epoch_start_t: float = snapshot_timestamps[0]
+        total_epoch_duration: float = snapshot_timestamps[-1] - snapshot_timestamps[0] ## end minus start time (seconds)
+        epoch_start_rel_snapshot_timestamps: NDArray = snapshot_timestamps - total_epoch_start_t
+        
+        # snapshot_timestamps: NDArray = np.array([snapshot_t for snapshot_t in _a_pf1D_dt_snapshots.keys()]) # (2879,)
+        # np.shape(snapshot_timestamps)
+        n_snapshots: int = len(snapshot_timestamps)
+        print(f'n_snapshots: {n_snapshots}')
+        peak_fr_over_all_pos: NDArray[ND.Shape["N_SNAPSHOTS, N_ACLUS"], Any] = np.vstack([np.nanmax(a_snapshot.occupancy_weighted_tuning_maps_matrix, axis=-1) for snapshot_t, a_snapshot in _a_pf1D_dt_snapshots.items()]) ## find peak fr (Hz) over all positions for each cells - (2879, 78)
+        # peak_fr_over_all_pos.shape (n_snapshot_timestamps, n_aclus)
+        
+        n_aclus: int = len(included_neuron_IDs)
+        # n_aclus: int = np.shape(peak_fr_over_all_pos)[-1]
+        print(f'n_aclus: {n_aclus}')
+
+        # idx_exceeding_threshold: NDArray[ND.Shape["N_ACLUS, N_TIME_BINS"], Any] = np.nonzero(peak_fr_over_all_pos > fr_threshold_Hz)
+        # np.shape(idx_exceeding_threshold)
+        idx_exceeding_threshold: NDArray[ND.Shape["N_ACLUS, N_TIME_BINS"], Any] = [np.nonzero(peak_fr_over_all_pos[:,i] > fr_threshold_Hz)[0] for i in np.arange(n_aclus)]
+        does_aclu_end_above_threshold: NDArray[ND.Shape["N_ACLUS"], Any] = np.array([(idx_exceeding_threshold[i][-1] == (n_snapshots-1)) if (len(idx_exceeding_threshold[i]) > 0) else False for i in np.arange(n_aclus)])
+
+        aclu_first_firing_snapshot_idx: Dict = {aclu:(idx_exceeding_threshold[i][0]) for i, aclu in enumerate(included_neuron_IDs) if does_aclu_end_above_threshold[i]}
+        aclu_first_firing_snapshot_timestep: Dict = {aclu:(snapshot_timestamps[idx_exceeding_threshold[i][0]]) for i, aclu in enumerate(included_neuron_IDs) if does_aclu_end_above_threshold[i]}
+        aclu_first_firing_snapshot_duration_fraction: Dict = {aclu:(epoch_start_rel_snapshot_timestamps[idx_exceeding_threshold[i][0]])/total_epoch_duration for i, aclu in enumerate(included_neuron_IDs) if does_aclu_end_above_threshold[i]}
+
+        return (aclu_first_firing_snapshot_duration_fraction, aclu_first_firing_snapshot_timestep, aclu_first_firing_snapshot_idx), (snapshot_timestamps, _a_pf1D_dt_snapshots)
+
+
+
+
+
+
+
+
     # HDFMixin Conformances ______________________________________________________________________________________________ #
     def to_hdf(self, file_path, key: str, **kwargs):
         """ Saves the object to key in the hdf5 file specified by file_path
@@ -1119,6 +1200,26 @@ class PfND_TimeDependent(PfND):
         return prepare_snapshots_for_export_as_xarray(historical_snapshots=self.historical_snapshots, ndim=self.ndim)
 
 
+    # ==================================================================================================================== #
+    # GridBinDebuggableMixin Conformances                                                                                  #
+    # ==================================================================================================================== #
+    def get_debug_binning_info(self) -> DebugBinningInfo:
+        """Returns relevant debug info about the binning configuration
+
+        Returns:
+            DebugBinningInfo: Contains binning dimensions and sizes
+        """  
+        # nCells = len(self.ratemap.neuron_ids) ## computes ratemap, which sucks and is slow
+        nCells = len(self.included_neuron_IDs) ## might be wrong, but is how it's used to calculate ratemap
+        return DebugBinningInfo(
+            n_xbin_edges=self.n_xbin_edges,
+            n_ybin_edges=self.n_ybin_edges, 
+            ndim=self.ndim,
+            nCells=nCells,
+        )
+
+        
+
 
 def perform_compute_time_dependent_placefields(active_session_spikes_df, active_pos, computation_config: PlacefieldComputationParameters, active_epoch_placefields1D=None, active_epoch_placefields2D=None, included_epochs=None, should_force_recompute_placefields=True):
     """ Most general computation function. Computes both 1D and 2D time-dependent placefields.
@@ -1145,7 +1246,10 @@ def perform_compute_time_dependent_placefields(active_session_spikes_df, active_
     if ((active_epoch_placefields2D is None) or should_force_recompute_placefields):
         print('Recomputing active_epoch_time_dependent_placefields2D...', end=' ')
         spikes_df = deepcopy(active_session_spikes_df).spikes.sliced_by_neuron_type('PYRAMIDAL') # Only use PYRAMIDAL neurons
-        active_epoch_placefields2D = PfND_TimeDependent.from_config_values(spikes_df, deepcopy(active_pos), epochs=included_epochs,
+        active_pos = deepcopy(active_pos)
+        active_pos.drop_dimensions_above(desired_ndim=2) ## inplace, so it returns None
+        
+        active_epoch_placefields2D = PfND_TimeDependent.from_config_values(spikes_df, active_pos, epochs=included_epochs,
                                         speed_thresh=computation_config.speed_thresh, frate_thresh=computation_config.frate_thresh,
                                         grid_bin=computation_config.grid_bin, grid_bin_bounds=computation_config.grid_bin_bounds, smooth=computation_config.smooth)
 

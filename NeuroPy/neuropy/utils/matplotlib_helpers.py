@@ -11,13 +11,14 @@ import matplotlib
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import AnchoredOffsetbox, TextArea, HPacker, VPacker
-from matplotlib.collections import BrokenBarHCollection # for draw_epoch_regions
+
 from matplotlib.widgets import RectangleSelector # required for `add_rectangular_selector`
 from matplotlib.widgets import SpanSelector
 
 from neuropy.utils.misc import AutoNameEnum, compute_paginated_grid_config, RowColTuple
 
 from typing import TYPE_CHECKING, Dict, List, Tuple, Optional, Callable, Union, Any
+import nptyping as ND
 from nptyping import NDArray
 
 if TYPE_CHECKING:
@@ -262,7 +263,7 @@ def _determine_best_placefield_2D_layout(xbin, ybin, included_unit_indicies, sub
 def _scale_current_placefield_to_acceptable_range(image, occupancy, drop_below_threshold: float=0.0000001):
     """ Universally used to prepare the pfmap to be displayed (across every plot time)
     
-    Regardless of `occupancy` and `drop_below_threshold`, the image is rescaled by its maximum (meaning the output will be normalized between zero and one).
+    Regardless of `occupancy` and `drop_below_threshold`, the image is rescaled to fill its dynamic range by its maximum (meaning the output will be normalized between zero and one).
     `occupancy` is not used unless `drop_below_threshold` is non-None
     
 
@@ -973,10 +974,10 @@ from flexitext import flexitext ## flexitext is an advanced text library used in
 
 @define(slots=False)
 class FigureMargins:
-    top_margin: float = 0.8
-    left_margin: float = 0.15
-    right_margin: float = 0.85 # (1.0-0.15)
-    bottom_margin: float = 0.150
+    top_margin: float = field(default=0.8)
+    left_margin: float = field(default=0.15)
+    right_margin: float = field(default=0.85) # (1.0-0.15)
+    bottom_margin: float = field(default=0.150)
 
     
     
@@ -1057,6 +1058,14 @@ class FormattedFigureText:
         
         text_formatter = FormattedFigureText.init_from_margins(left_margin=0.01)
         
+        ## Default for non-publication:
+        text_formatter = FormattedFigureText.init_from_margins(top_margin=0.8, left_margin=0.15, right_margin=0.85, bottom_margin=0.150) ## Note the margins provide the empty room to position the flexitext headers, and without adding them the fancy text would not fit.
+
+        ## Default for publication:
+        text_formatter = FormattedFigureText.init_from_margins(top_margin=0.9, left_margin=0.15, right_margin=0.85, bottom_margin=0.150) ## Note the margins provide the empty room to position the flexitext headers, and without adding them the fancy text would not fit.
+
+                
+        
         """
         _obj = cls()
         if top_margin is not None:
@@ -1114,7 +1123,7 @@ class FormattedFigureText:
         self.setup_margins(fig, **kwargs)
         # Add flexitext
         top_margin, left_margin, bottom_margin = kwargs.get('top_margin', self.top_margin), kwargs.get('left_margin', self.left_margin), kwargs.get('bottom_margin', self.bottom_margin)
-        title_text_obj = flexitext(left_margin, top_margin, 'long ($L$)|short($S$) firing rate indicies', va="bottom", xycoords="figure fraction")
+        title_text_obj = flexitext(left_margin, top_margin, 'long ($L$)|short($S$) firing rate indices', va="bottom", xycoords="figure fraction")
         footer_text_obj = flexitext((self.left_margin*0.1), (self.bottom_margin*0.25), self._build_footer_string(active_context=active_context), va="top", xycoords="figure fraction")
         return title_text_obj, footer_text_obj
 
@@ -1150,7 +1159,7 @@ class FormattedFigureText:
 #     text.set_fontsize(adjusted_size)
 
 
-def plot_position_curves_figure(position_obj, include_velocity=True, include_accel=False, figsize=(24, 10)):
+def plot_position_curves_figure(position_obj, include_velocity=True, include_accel=False, figsize=(24, 10), axes_list=None):
     """ Renders a figure with a position curve and optionally its higher-order derivatives """
     num_subplots = 1
     out_axes_list = []
@@ -1159,10 +1168,15 @@ def plot_position_curves_figure(position_obj, include_velocity=True, include_acc
     if include_accel:
         num_subplots = num_subplots + 1
     subplots=(num_subplots, 1)
-    fig = plt.figure(figsize=figsize, clear=True)
-    gs = plt.GridSpec(subplots[0], subplots[1], figure=fig, hspace=0.02)
     
-    ax0 = fig.add_subplot(gs[0])
+    if axes_list is None:
+        fig = plt.figure(figsize=figsize, clear=True)
+        gs = plt.GridSpec(subplots[0], subplots[1], figure=fig, hspace=0.02)
+        ax0 = fig.add_subplot(gs[0])
+    else:
+        fig = axes_list[0].figure
+        ax0 = axes_list[0]
+    
     ax0.plot(position_obj.time, position_obj.x, 'k')
     ax0.set_ylabel('pos_x')
     out_axes_list.append(ax0)
@@ -1170,39 +1184,33 @@ def plot_position_curves_figure(position_obj, include_velocity=True, include_acc
     prev_axis = ax0
 
     if include_velocity:
-        ax1 = fig.add_subplot(gs[1])
-        # ax1.plot(position_obj.time, pos_df['velocity_x'], 'grey')
-        # ax1.plot(position_obj.time, pos_df['velocity_x_smooth'], 'r')
-        ax1.plot(position_obj.time, position_obj._data['velocity_x_smooth'], 'k')
+        if axes_list is None:
+            ax1 = fig.add_subplot(gs[1])
+        else:
+            ax1 = axes_list[1]
+        ax1.plot(position_obj.time, position_obj._df['velocity_x_smooth'], 'k')
         ax1.set_ylabel('Velocity_x')
-        ax0.set_xticklabels([]) # this is intensionally ax[i-1], as we want to disable the tick labels on above plots        
+        ax0.set_xticklabels([])
         out_axes_list.append(ax1)
-        # share x axis
         ax1.sharex(prev_axis)
         prev_axis = ax1
 
     if include_accel:  
-        ax2 = fig.add_subplot(gs[2])
-        # ax2.plot(position_obj.time, position_obj.velocity)
-        # ax2.plot(position_obj.time, pos_df['velocity_x'])
-        ax2.plot(position_obj.time, position_obj._data['acceleration_x'], 'k')
-        # ax2.plot(position_obj.time, pos_df['velocity_y'])
+        if axes_list is None:
+            ax2 = fig.add_subplot(gs[2])
+        else:
+            ax2 = axes_list[2]
+        ax2.plot(position_obj.time, position_obj._df['acceleration_x'], 'k')
         ax2.set_ylabel('Higher Order Terms')
-        ax1.set_xticklabels([]) # this is intensionally ax[i-1], as we want to disable the tick labels on above plots
+        ax1.set_xticklabels([])
         out_axes_list.append(ax2)
-        # share x axis
         ax2.sharex(prev_axis)
         prev_axis = ax2
 
-    # Shared:
-    # ax0.get_shared_x_axes().join(ax0, ax1)
-    # ax0.get_shared_x_axes().join(*out_axes_list) # this was removed for some reason! AttributeError: 'GrouperView' object has no attribute 'join'
     ax0.set_xticklabels([])
     ax0.set_xlim([position_obj.time[0], position_obj.time[-1]])
 
-    return fig, out_axes_list
-
-    
+    return fig, out_axes_list    
 
 
 # ==================================================================================================================== #
@@ -1226,7 +1234,7 @@ def _subfn_build_epoch_region_label(xy, text, ax, **labels_kwargs):
     return ax.text(xy[0], y, text, **({'ha': 'center', 'va': 'top', 'family': 'sans-serif', 'size': 14, 'rotation': 0} | labels_kwargs)) # va="top" places it inside the box if it's aligned to the top
 
 # @function_attributes(short_name='draw_epoch_regions', tags=['epoch','matplotlib','helper'], input_requires=[], output_provides=[], uses=['BrokenBarHCollection'], used_by=[], creation_date='2023-03-28 14:23')
-def draw_epoch_regions(epoch_obj, curr_ax, facecolor=('green','red'), edgecolors=("black",), alpha=0.25, labels_kwargs=None, defer_render=False, debug_print=False, **kwargs):
+def draw_epoch_regions(epoch_obj, curr_ax, facecolor=('green','red'), edgecolors=("black",), alpha=0.25, labels_kwargs=None, relative_y_positions=None, defer_render=False, debug_print=False, **kwargs):
     """ plots epoch rectangles with customizable color, edgecolor, and labels on an existing matplotlib axis
     2022-12-14
 
@@ -1278,19 +1286,48 @@ def draw_epoch_regions(epoch_obj, curr_ax, facecolor=('green','red'), edgecolors
         fig.show()
 
     """
+    from matplotlib.collections import BrokenBarHCollection # for draw_epoch_regions
+    
+    if relative_y_positions is None: 
+        # relative_rect_y_position
+        relative_y_positions = [0.0, 1.0] # [(0.0, 1.0) for i in np.arange(n_epoch_types)] ## each epoch by default spans the entire y-axis, overlapping one another
+    assert len(relative_y_positions) == 2
+    
+    linewidths = kwargs.pop('linewidths', (1,))
+
+    def _subfn_get_span_y(an_ax):
+        """ captures: relative_y_positions
+        """
+        a_ylim_tuple = an_ax.get_ylim()
+        curr_vlim_height = a_ylim_tuple[1] - a_ylim_tuple[0]
+        
+        relative_y_height = relative_y_positions[1] - relative_y_positions[0]
+        desired_y_height = (relative_y_height * curr_vlim_height)
+        desired_y_min =  a_ylim_tuple[0] + (relative_y_positions[0] * relative_y_height)
+        desired_y_max = (desired_y_min + desired_y_height)
+        return desired_y_min, desired_y_height, desired_y_max
+
     # epoch_obj
     def _subfn_perform_plot_epochs(an_epoch_tuples, an_ax):
-        curr_span_ymin = an_ax.get_ylim()[0]
-        curr_span_ymax = an_ax.get_ylim()[1]
-        curr_span_height = curr_span_ymax - curr_span_ymin
+        # curr_span_ymin = an_ax.get_ylim()[0] * relative_y_positions[0] 
+        # curr_span_ymax = an_ax.get_ylim()[1] * relative_y_positions[1]
+        # curr_span_height = curr_span_ymax - curr_span_ymin
+        
+        desired_y_min, desired_y_height, desired_y_max = _subfn_get_span_y(an_ax=an_ax)
+        
         # xrange: list of (float, float) The sequence of (left-edge-position, width) pairs for each bar.
         # yrange: (lower-edge, height) 
-        epochs_collection = BrokenBarHCollection(xranges=an_epoch_tuples, yrange=(curr_span_ymin, curr_span_height), facecolor=facecolor, alpha=alpha, edgecolors=edgecolors, linewidths=(1,), **kwargs) # , offset_transform=curr_ax.transData
+        # epochs_collection = BrokenBarHCollection(xranges=an_epoch_tuples, yrange=(curr_span_ymin, curr_span_height), facecolor=facecolor, alpha=alpha, edgecolors=edgecolors, linewidths=linewidths, **kwargs) # , offset_transform=curr_ax.transData
+        epochs_collection = BrokenBarHCollection(xranges=an_epoch_tuples, yrange=(desired_y_min, desired_y_height), facecolor=facecolor, alpha=alpha, edgecolors=edgecolors, linewidths=linewidths, **kwargs) # , offset_transform=curr_ax.transData
         if debug_print:
-            print(f'(curr_span_ymin, curr_span_ymax): ({curr_span_ymin}, {curr_span_ymax}), an_epoch_tuples: {an_epoch_tuples}')
+            print(f'(desired_y_min, desired_y_height, desired_y_max): ({desired_y_min}, {desired_y_height}, {desired_y_max}), an_epoch_tuples: {an_epoch_tuples}')
         an_ax.add_collection(epochs_collection)
         return epochs_collection
         
+
+    # ==================================================================================================================================================================================================================================================================================== #
+    # BEGIN FUNCTION BODY                                                                                                                                                                                                                                                                  #
+    # ==================================================================================================================================================================================================================================================================================== #
 
     epoch_tuples = [(start_t, width_duration) for start_t, width_duration in zip(epoch_obj.starts, epoch_obj.durations)] # [(0.0, 1211.5580800310709), (1211.5580800310709, 882.3397767931456)]
     epoch_mid_t = [a_tuple[0]+(0.5*a_tuple[1]) for a_tuple in epoch_tuples] # used for labels
@@ -1300,8 +1337,10 @@ def draw_epoch_regions(epoch_obj, curr_ax, facecolor=('green','red'), edgecolors
     if isinstance(curr_ax.get_ylim()[0], tuple):
         ## strange case for brokenaxes
         a_ylim_tuple = curr_ax.get_ylim()[0]
-        curr_span_ymin = a_ylim_tuple[0]
-        curr_span_ymax = a_ylim_tuple[1]
+        
+        raise NotImplementedError(f'broke on 2025-05-05 08:40')
+        curr_span_ymin = a_ylim_tuple[0] * relative_y_positions[0]
+        curr_span_ymax = a_ylim_tuple[1] * relative_y_positions[1]
 
         ## num xlims:
         # num_brokenaxes: int = len(curr_ax.get_ylim())
@@ -1335,16 +1374,17 @@ def draw_epoch_regions(epoch_obj, curr_ax, facecolor=('green','red'), edgecolors
 
         return epoch_collection_list, epoch_labels
 
-
     else:
 
         # can plot on a single axis:
         epochs_collection = _subfn_perform_plot_epochs(an_epoch_tuples=epoch_tuples, an_ax=curr_ax)
         if labels_kwargs is not None:
-            a_ylim_tuple = curr_ax.get_ylim()
-            curr_span_ymin = a_ylim_tuple[0]
-            curr_span_ymax = a_ylim_tuple[1]
-            epoch_labels = [_subfn_build_epoch_region_label((a_mid_t, curr_span_ymax), a_label, curr_ax, **labels_kwargs) for a_label, a_mid_t in zip(epoch_obj.labels, epoch_mid_t)]
+            # a_ylim_tuple = curr_ax.get_ylim()
+            # curr_span_ymin = a_ylim_tuple[0] * relative_y_positions[0]
+            # curr_span_ymax = a_ylim_tuple[1] * relative_y_positions[1]
+            
+            desired_y_min, desired_y_height, desired_y_max = _subfn_get_span_y(an_ax=curr_ax)
+            epoch_labels = [_subfn_build_epoch_region_label((a_mid_t, desired_y_max), a_label, curr_ax, **labels_kwargs) for a_label, a_mid_t in zip(epoch_obj.labels, epoch_mid_t)]
         else:
             epoch_labels = None
         
@@ -1760,7 +1800,8 @@ def interactive_select_grid_bin_bounds_2D(curr_active_pipeline, epoch_name='maze
 
 
 # Title Helpers ______________________________________________________________________________________________________ #
-def perform_update_title_subtitle(fig=None, ax=None, title_string:Optional[str]=None, subtitle_string:Optional[str]=None, active_context=None, use_flexitext_titles=False):
+def perform_update_title_subtitle(fig=None, ax=None, title_string:Optional[str]=None, subtitle_string:Optional[str]=None, active_context=None, use_flexitext_titles=False, include_footer_text:bool=True,
+                                  top_margin=None, left_margin=None, right_margin=None, bottom_margin=None):
     """ Only updates the title/subtitle if the value is not None
     
     Usage:
@@ -1777,7 +1818,8 @@ def perform_update_title_subtitle(fig=None, ax=None, title_string:Optional[str]=
             
 
     if title_string is not None:
-        fig.canvas.manager.set_window_title(title_string) # sets the window's title
+        if fig.canvas.manager is not None:
+            fig.canvas.manager.set_window_title(title_string) # sets the window's title
 
     if (active_context is None) or (not use_flexitext_titles):
         if title_string is not None:
@@ -1790,7 +1832,8 @@ def perform_update_title_subtitle(fig=None, ax=None, title_string:Optional[str]=
         from flexitext import flexitext ## flexitext version
         from neuropy.utils.matplotlib_helpers import FormattedFigureText
 
-        text_formatter = FormattedFigureText()
+        # text_formatter = FormattedFigureText()
+        text_formatter = FormattedFigureText.init_from_margins(top_margin=top_margin, left_margin=left_margin, right_margin=right_margin, bottom_margin=bottom_margin)
         # text_formatter.bottom_margin = 0.0 # No margin on the bottom
         # text_formatter.top_margin = 0.6 # doesn't change anything. Neither does subplot_adjust
         text_formatter.setup_margins(fig)
@@ -1807,8 +1850,10 @@ def perform_update_title_subtitle(fig=None, ax=None, title_string:Optional[str]=
         if (subtitle_string is not None) and (ax is not None):
             ax.set_title(subtitle_string, fontsize='10', wrap=True) # this doesn't appear to be visible, so what is it used for?
 
-        footer_text_obj = text_formatter.add_flexitext_context_footer(active_context=active_context, override_left_margin_multipler=0.1, override_bottom_margin_multiplier=0.1) # flexitext((text_formatter.left_margin*0.1), (text_formatter.bottom_margin*0.25), text_formatter._build_footer_string(active_context=active_context), va="top", xycoords="figure fraction")
-
+        footer_text_obj = None
+        if (include_footer_text and (active_context is not None)):
+            footer_text_obj = text_formatter.add_flexitext_context_footer(active_context=active_context, override_left_margin_multipler=0.1, override_bottom_margin_multiplier=0.1) # flexitext((text_formatter.left_margin*0.1), (text_formatter.bottom_margin*0.25), text_formatter._build_footer_string(active_context=active_context), va="top", xycoords="figure fraction")
+        
         # label_objects = {'header': header_text_obj, 'footer': footer_text_obj, 'formatter': text_formatter}
     return footer_text_obj
 
@@ -2624,3 +2669,38 @@ class TabbedMatplotlibFigures:
         # return MatplotlibRenderPlots(name=f'TabbedMatplotlibFigures.build_tabbed_multi_figure', figures=figures_dict, axes=axs_dict, ui=ui)
 
     
+
+# @function_attributes(short_name=None, tags=['image-processing', 'quiver','matplotlib', 'figure'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2024-08-16 00:00', related_items=[])
+def plot_grad_quiver(sobel_x, sobel_y, downsample_step=1):
+    """ Used to visualize the Image Processing Techniques 
+
+    # Compute the magnitude of the gradient
+    gradient_magnitude = np.hypot(sobel_x, sobel_y)
+    gradient_direction = np.arctan2(sobel_y, sobel_x)
+
+    """
+    # Compute the magnitude of the gradient
+    gradient_magnitude = np.hypot(sobel_x, sobel_y)
+    gradient_direction = np.arctan2(sobel_y, sobel_x)
+
+    # Create a grid of coordinates for plotting arrows
+    Y, X = np.meshgrid(np.arange(gradient_magnitude.shape[0]), np.arange(gradient_magnitude.shape[1]), indexing='ij')
+
+    # Downsample the arrow plot for better visualization (optional)
+
+    X_downsampled = X[::downsample_step, ::downsample_step]
+    Y_downsampled = Y[::downsample_step, ::downsample_step]
+    sobel_x_downsampled = sobel_x[::downsample_step, ::downsample_step]
+    sobel_y_downsampled = sobel_y[::downsample_step, ::downsample_step]
+
+    # Plotting the gradient magnitude and arrows representing the direction
+    fig = plt.figure(figsize=(10, 10))
+    plt.imshow(gradient_magnitude, cmap='gray', origin='lower')
+    plt.quiver(X_downsampled, Y_downsampled, sobel_x_downsampled, sobel_y_downsampled,
+            color='red', angles='xy', scale_units='xy') # , scale=5, width=0.01
+    plt.title('Gradient Magnitude with Direction Arrows')
+    plt.axis('off')
+    plt.show()
+
+    return fig
+

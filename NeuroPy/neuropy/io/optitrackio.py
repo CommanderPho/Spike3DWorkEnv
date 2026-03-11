@@ -1,6 +1,7 @@
 import csv
 import linecache
 import re
+from typing import Optional
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
@@ -110,6 +111,10 @@ def posfromCSV(fileName):
     y0 = np.asarray(posdata.iloc[:, 2])
     z0 = np.asarray(posdata.iloc[:, 3])
 
+    pos_df: pd.DataFrame = pd.DataFrame(dict(t=t, x0=x0, y0=y0, z0=z0))
+    pos_df.dropna(axis='index', how='any', subset=['t'], inplace=True) ## drop any entries with NaN timestamps, that is irrecoverable
+    t, x0, y0, z0 = pos_df['t'].to_numpy(), pos_df['x0'].to_numpy(), pos_df['y0'].to_numpy(), pos_df['z0'].to_numpy() ## extract cols back to vars
+
     # if end frames are nan drop those
     # last_nan_region = contiguous_regions(np.isnan(x0))[-1]
     # todo: potential bug here where csv file has missing timestamps at end that go to NaN and then don't get accounted for.
@@ -129,6 +134,11 @@ def posfromCSV(fileName):
             "position data needs to be exported in either centimeters or meters"
         )
 
+    ## drop NaNs one more time
+    pos_df: pd.DataFrame = pd.DataFrame(dict(t=t, x=x, y=y, z=z))
+    pos_df.dropna(axis='index', how='any', subset=['t', 'x', 'y'], inplace=True) ## drop any entries with NaN timestamps, that is irrecoverable
+    t, x, y, z = pos_df['t'].to_numpy(), pos_df['x'].to_numpy(), pos_df['y'].to_numpy(), pos_df['z'].to_numpy() ## extract cols back to vars
+
     return x, y, z, t
 
 
@@ -140,9 +150,15 @@ def interp_missing_pos(x, y, z, t):
     for ids in idnan:
         missing_ids = range(ids[0], ids[-1])
         bracket_ids = ids + [-1, 0]
-        xgood[missing_ids] = np.interp(t[missing_ids], t[bracket_ids], x[bracket_ids])
-        ygood[missing_ids] = np.interp(t[missing_ids], t[bracket_ids], y[bracket_ids])
-        zgood[missing_ids] = np.interp(t[missing_ids], t[bracket_ids], z[bracket_ids])
+        try:
+            xgood[missing_ids] = np.interp(t[missing_ids], t[bracket_ids], x[bracket_ids])
+            ygood[missing_ids] = np.interp(t[missing_ids], t[bracket_ids], y[bracket_ids])
+            zgood[missing_ids] = np.interp(t[missing_ids], t[bracket_ids], z[bracket_ids])
+        except IndexError as e:
+            # Allows skiping a few malformed points instead of aborting entirely
+            print(f'WARN: skipping malformed interpolation ids: {ids} instead of aborting entirely.\n\tOccured with error {e}.')
+        except Exception as e:
+            raise
 
     return xgood, ygood, zgood
 
@@ -331,11 +347,36 @@ def get_sync_info(_sync_file):
 
 
 class OptitrackIO:
-    def __init__(self, dirname, scale_factor=1.0) -> None:
+    """
+
+    Usage:
+        from neuropy.core.position import Position
+
+        csv_path = Path(r"W:\Data\Bapun\RatU\RatUDay5OpenfieldSD\Raw_data\position\CSV").resolve()
+        assert csv_path.exists()
+        _out: OptitrackIO = OptitrackIO(dirname=csv_path)
+        pos_df: pd.DataFrame = _out.to_dataframe()
+        # pos_df
+
+        pos_obj: Position = Position(pos_df, metadata={'sampling_rate': _out.sampling_rate,
+                                                    'source': 'from_csvs',
+                                                    'source_files': _out.dirname.as_posix(),
+                                                        'scale_factor': _out.scale_factor,
+                                                        'datetime': _out.datetime,
+                                                        'time': _out.time,
+                                                        'override_included_csv_files': _out.override_included_csv_files,
+                                                        })
+
+        # pos_obj: Position = Position.init(traces=pos_df[['t', 'x', 'y', 'z', 'dt']].to_numpy(), sampling_rate=_out.sampling_rate, metadata={'source': 'from_csvs', 'source_files': _out.dirname.as_posix(), })
+        pos_obj
+
+    """
+    def __init__(self, dirname, scale_factor=1.0, override_included_csv_files=None) -> None:
         self.dirname = dirname
         self.scale_factor = scale_factor
         self.datetime = None
         self.time = None
+        self.override_included_csv_files = override_included_csv_files
         self._parse_folder()
 
     def _parse_folder(self):
@@ -350,10 +391,17 @@ class OptitrackIO:
             scale the extracted coordinates, by default 1.0
         """
 
-        sampling_rate = getSampleRate(sorted((self.dirname).glob("*.csv"))[0])
+        if self.override_included_csv_files is None:
+            found_files = sorted((self.dirname).glob("*.csv"))
+        else:
+            found_files = sorted(self.override_included_csv_files)
+            
+        assert len(found_files) > 0, f"found no files!"
+        
+        sampling_rate = getSampleRate(found_files[0])
 
         # ------- collecting timepoints related to position tracking ------
-        posfiles = np.asarray(sorted(self.dirname.glob("*.csv")))
+        posfiles = np.asarray(found_files)
         posfilestimes = np.asarray(
             [
                 datetime.strptime(file.stem, "Take %Y-%m-%d %I.%M.%S %p")
@@ -553,3 +601,41 @@ class OptitrackIO:
         self.tracking_srate = tracking_sRate
 
         self.save()
+
+
+    def to_dataframe(self) -> pd.DataFrame:
+        pos_df = pd.DataFrame({'t': self.datetime_array, 'x': self.x, 'y': self.y, 'z': self.z, })
+        pos_df['dt'] = pos_df['t'].copy() ## convert datetime times to 'dt' column
+        pos_df['t'] = (pos_df['t'] - np.nanmin(pos_df['dt'])).dt.total_seconds() ## minimum (first) time to 't' (seconds) column
+        pos_df.attrs.update({'srate': self.sampling_rate, 'scale_factor': self.scale_factor})
+        return pos_df
+    
+
+    def to_position_obj(self, pos_obj_save_path: Optional[Path]=None):
+        """
+        
+        """
+        from neuropy.core.position import Position
+        
+        pos_df: pd.DataFrame = self.to_dataframe()
+        pos_df = pos_df.dropna(how='any', subset=['t', 'x', 'y'], inplace=False) ## drop any NaN values
+        pos_obj: Position = Position(pos_df, metadata={'sampling_rate': self.sampling_rate,
+                                                    'source': 'from_csvs',
+                                                    'source_files': self.dirname.as_posix(),
+                                                        'scale_factor': self.scale_factor,
+                                                        'datetime': self.datetime,
+                                                        'time': self.time,
+                                                        'override_included_csv_files': self.override_included_csv_files,
+                                                        })
+
+        # pos_obj: Position = Position.init(traces=pos_df[['t', 'x', 'y', 'z', 'dt']].to_numpy(), sampling_rate=_out.sampling_rate, metadata={'source': 'from_csvs', 'source_files': _out.dirname.as_posix(), })
+        if pos_obj_save_path is not None:
+            pos_obj.filename = pos_obj_save_path ## set the filename
+            print(f'trying to save pos_obj to "{pos_obj_save_path.as_posix()}"')
+            pos_obj.save()
+            print(f'\tdone.')
+            
+        return pos_obj
+    
+
+    
