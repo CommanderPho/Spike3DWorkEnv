@@ -2,6 +2,7 @@ import sys
 from copy import deepcopy
 from typing import List, Dict, Any, Tuple, Optional, Callable
 from attrs import define, field, Factory, asdict
+import nptyping as ND
 from nptyping import NDArray
 from pathlib import Path
 import numpy as np
@@ -9,6 +10,7 @@ import pandas as pd
 import tables as tb
 from datetime import datetime
 from neuropy.utils.misc import numpyify_array
+from neuropy.utils.mixins.binning_helpers import safe_limit_num_grid_bin_values
 from neuropy.utils.result_context import IdentifyingContext
 from neuropy.utils.result_context import IdentifyingContext as Ctx
 
@@ -83,13 +85,28 @@ class UserAnnotationsManager(HDFMixin, AttrsBasedClassHelperMixin):
 
 
     @function_attributes(short_name=None, tags=['XxC','LxC', 'SxC'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2023-10-05 16:18', related_items=[])
-    def add_neuron_exclusivity_column(self, neuron_indexed_df, included_session_contexts, neuron_uid_column_name='neuron_uid'):
+    def add_neuron_exclusivity_column(self, neuron_indexed_df: pd.DataFrame, included_session_contexts: List[IdentifyingContext], neuron_uid_column_name: str = 'neuron_uid', neuron_added_XdC_column_name: str = 'XxC_status'):
         """ adds 'XxC_status' column to the `neuron_indexed_df`: the user-labeled cell exclusivity (LxC/SxC/Shared) status {'LxC', 'SxC', 'Shared'}
         
             annotation_man = UserAnnotationsManager()
             long_short_fr_indicies_analysis_table = annotation_man.add_neuron_exclusivity_column(long_short_fr_indicies_analysis_table, included_session_contexts, aclu_column_name='neuron_id')
             long_short_fr_indicies_analysis_table
     
+            # Usage 2:
+                from neuropy.core.user_annotations import UserAnnotationsManager, SessionCellExclusivityRecord
+
+                ## INPUTS: included_session_contexts, across_session_inst_fr_computation_df, all_neuron_stats_table
+                annotation_man = UserAnnotationsManager()
+                across_session_inst_fr_computation_df = annotation_man.add_neuron_exclusivity_column(across_session_inst_fr_computation_df, included_session_contexts=included_session_contexts,
+                                                                                            neuron_uid_column_name='neuron_uid', neuron_added_XdC_column_name='active_set_membership_from_user_annotations')
+
+                all_neuron_stats_table = annotation_man.add_neuron_exclusivity_column(all_neuron_stats_table, included_session_contexts=included_session_contexts,
+                                                                                            neuron_uid_column_name='neuron_uid', neuron_added_XdC_column_name='active_set_membership_from_user_annotations')
+
+
+                across_session_inst_fr_computation_df
+                all_neuron_stats_table
+
         """
         LxC_uids = []
         SxC_uids = []
@@ -97,12 +114,17 @@ class UserAnnotationsManager(HDFMixin, AttrsBasedClassHelperMixin):
         for a_ctxt in included_session_contexts:
             session_uid = a_ctxt.get_description(separator="|", include_property_names=False)
             session_cell_exclusivity: SessionCellExclusivityRecord = self.annotations[a_ctxt].get('session_cell_exclusivity', None)
-            LxC_uids.extend([f"{session_uid}|{aclu}" for aclu in session_cell_exclusivity.LxC])
-            SxC_uids.extend([f"{session_uid}|{aclu}" for aclu in session_cell_exclusivity.SxC])
+            if session_cell_exclusivity is None:
+                print(f'session: {session_uid} has no user annotations')
+                continue
+            else:
+                LxC_uids.extend([f"{session_uid}|{aclu}" for aclu in session_cell_exclusivity.LxC])
+                SxC_uids.extend([f"{session_uid}|{aclu}" for aclu in session_cell_exclusivity.SxC])
             
-        neuron_indexed_df['XxC_status'] = 'Shared'
-        neuron_indexed_df.loc[np.isin(neuron_indexed_df[neuron_uid_column_name], LxC_uids), 'XxC_status'] = 'LxC'
-        neuron_indexed_df.loc[np.isin(neuron_indexed_df[neuron_uid_column_name], SxC_uids), 'XxC_status'] = 'SxC'
+        # neuron_indexed_df[neuron_added_XdC_column_name] = 'Shared'
+        neuron_indexed_df[neuron_added_XdC_column_name] = 'AnyC'
+        neuron_indexed_df.loc[np.isin(neuron_indexed_df[neuron_uid_column_name], LxC_uids), neuron_added_XdC_column_name] = 'LxC'
+        neuron_indexed_df.loc[np.isin(neuron_indexed_df[neuron_uid_column_name], SxC_uids), neuron_added_XdC_column_name] = 'SxC'
 
         return neuron_indexed_df
 
@@ -406,93 +428,72 @@ class UserAnnotationsManager(HDFMixin, AttrsBasedClassHelperMixin):
 
     # def add_user_annotation(self, context: IdentifyingContext, value):
     @classmethod
-    def get_hardcoded_specific_session_cell_exclusivity_annotations_dict(cls) -> dict:
-        """ hand-labeled by pho on 2023-10-04 """
-        session_cell_exclusivity_annotations: Dict[IdentifyingContext, SessionCellExclusivityRecord] = {
-        IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='one',session_name='2006-6-08_14-26-15'):
-            SessionCellExclusivityRecord(LxC=[109],
-                LpC=[],
-                SpC=[67, 52],
-                SxC=[23,4,58]),
-        IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='one',session_name='2006-6-09_1-22-43'):
-            SessionCellExclusivityRecord(LxC=[3, 29, 103],
-                LpC=[],
-                SpC=[33, 35, 58],
-                SxC=[55]),
-        IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='one',session_name='2006-6-12_15-55-31'):
-            SessionCellExclusivityRecord(LxC=[],
-                LpC=[2, 3, 34],
-                SpC=[31, 33, 53],
-                SxC=[30]),
-        IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-07_16-40-19'):
-            SessionCellExclusivityRecord(LxC=[],
-                LpC=[],
-                SpC=[18, 65],
-                SxC=[3, 19]),
-        IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-08_21-16-25'):
-            SessionCellExclusivityRecord(LxC=[90],
-                LpC=[23, 73],
-                SpC=[4, 16, 82],
-                SxC=[8]),
-        IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-09_22-24-40'):
-            SessionCellExclusivityRecord(LxC=[91, 95],
-                LpC=[15, 16, 32],
-                SpC=[11],
-                SxC=[]),
-        IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-12_16-53-46'):
-            SessionCellExclusivityRecord(LxC=[38, 59],
-                LpC=[51, 60],
-                SpC=[7],
-                SxC=[8]),
-        ## Break
-        IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-09_17-29-30'):
-            SessionCellExclusivityRecord(LxC=[],
-                LpC=[4, 6, 17, 28, 12],
-                SpC=[21, 31],
-                SxC=[41]),
-        IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-10_12-25-50'):
-            SessionCellExclusivityRecord(LxC=[23],
-                LpC=[19],
-                SpC=[36],
-                SxC=[29]),
-        IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-09_16-40-54'):
-            SessionCellExclusivityRecord(LxC=[25],
-                LpC=[12, 14, 17],
-                SpC=[30],
-                SxC=[]),
-        IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-10_12-58-3'):
-            SessionCellExclusivityRecord(LxC=[14, 30, 32],
-                LpC=[40],
-                SpC=[42],
-                SxC=[]),
-        IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='11-02_17-46-44'):
-            SessionCellExclusivityRecord(LxC=[8, 27],
-                LpC=[10],
-                SpC=[18,20,40],
-                SxC=[17]),
-        IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='11-02_19-28-0'):
-            SessionCellExclusivityRecord(LxC=[27],
-                LpC=[8, 13],
-                SpC=[],
-                SxC=[]),
-        IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='11-03_12-3-25'):
-            SessionCellExclusivityRecord(LxC=[],
-                LpC=[],
-                SpC=[13,22,28],
-                SxC=[]),
-        IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='fet11-01_12-58-54'):
-            SessionCellExclusivityRecord(LxC=[],
-                LpC=[6, 10, 16, 19],
-                SpC=[24],
-                SxC=[]),
+    def get_hardcoded_specific_session_cell_exclusivity_annotations_dict(cls) -> Dict[IdentifyingContext, SessionCellExclusivityRecord]:
+        """ hand-labeled by Kamran + Pho on 2025-08-06
 
+        
+        """
+        # hand-labeled by pho on 2023-10-04 __________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________ #
+        # session_cell_exclusivity_annotations: Dict[IdentifyingContext, SessionCellExclusivityRecord] = {
+        #     IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='one',session_name='2006-6-08_14-26-15'): SessionCellExclusivityRecord(LxC=[109], LpC=[], Others=[], SpC=[67, 52], SxC=[23, 4, 58]),
+        #     IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='one',session_name='2006-6-09_1-22-43'): SessionCellExclusivityRecord(LxC=[3, 29, 103], LpC=[], Others=[], SpC=[33, 35, 58], SxC=[55]),
+        #     IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='one',session_name='2006-6-12_15-55-31'): SessionCellExclusivityRecord(LxC=[], LpC=[2, 3, 34], Others=[], SpC=[31, 33, 53], SxC=[30]),
+        #     IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-07_16-40-19'): SessionCellExclusivityRecord(LxC=[], LpC=[], Others=[], SpC=[18, 65], SxC=[3, 19]),
+        #     IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-08_21-16-25'): SessionCellExclusivityRecord(LxC=[90], LpC=[23, 73], Others=[], SpC=[4, 16, 82], SxC=[8]),
+        #     IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-09_22-24-40'): SessionCellExclusivityRecord(LxC=[91, 95], LpC=[15, 16, 32], Others=[], SpC=[11], SxC=[]),
+        #     IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-12_16-53-46'): SessionCellExclusivityRecord(LxC=[38, 59], LpC=[51, 60], Others=[], SpC=[7], SxC=[8]),
+        #     IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-09_17-29-30'): SessionCellExclusivityRecord(LxC=[], LpC=[4, 6, 17, 28, 12], Others=[], SpC=[21, 31], SxC=[41]),
+        #     IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-10_12-25-50'): SessionCellExclusivityRecord(LxC=[23], LpC=[19], Others=[], SpC=[36], SxC=[29]),
+        #     IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-09_16-40-54'): SessionCellExclusivityRecord(LxC=[25], LpC=[12, 14, 17], Others=[], SpC=[30], SxC=[]),
+        #     IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-10_12-58-3'): SessionCellExclusivityRecord(LxC=[14, 30, 32], LpC=[40], Others=[], SpC=[42], SxC=[]),
+        #     IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='11-02_17-46-44'): SessionCellExclusivityRecord(LxC=[8, 27], LpC=[10], Others=[], SpC=[18, 20, 40], SxC=[17]),
+        #     IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='11-02_19-28-0'): SessionCellExclusivityRecord(LxC=[27], LpC=[8, 13], Others=[], SpC=[], SxC=[]),
+        #     IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='11-03_12-3-25'): SessionCellExclusivityRecord(LxC=[], LpC=[], Others=[], SpC=[13, 22, 28], SxC=[]),
+        #     IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='fet11-01_12-58-54'): SessionCellExclusivityRecord(LxC=[], LpC=[6, 10, 16, 19], Others=[], SpC=[24], SxC=[]),
+        # }
+        
+        # ## Defined based on 80% median firing criteria - 2025-07-29 03:01 
+        # ## Computed using `print(',\n'.join([': '.join([k.get_initialization_code_string(), str(v)]) for k, v in session_cell_exclusivity_annotations.items()]))`
+        # session_cell_exclusivity_annotations: Dict[IdentifyingContext, SessionCellExclusivityRecord] = {
+        #     IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='one',session_name='2006-6-08_14-26-15'): SessionCellExclusivityRecord(LxC=[16, 35, 73], LpC=[], Others=[], SpC=[], SxC=[3, 15, 24, 56, 58, 60]),
+        #     IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='one',session_name='2006-6-09_1-22-43'): SessionCellExclusivityRecord(LxC=[5, 13, 29, 38, 63, 67], LpC=[], Others=[], SpC=[], SxC=[33, 35, 58]),
+        #     IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='one',session_name='2006-6-12_15-55-31'): SessionCellExclusivityRecord(LxC=[2], LpC=[], Others=[], SpC=[], SxC=[12, 25, 35]),
+        #     IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-07_16-40-19'): SessionCellExclusivityRecord(LxC=[48], LpC=[], Others=[], SpC=[], SxC=[28]),
+        #     IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-12_16-53-46'): SessionCellExclusivityRecord(LxC=[32, 36, 53], LpC=[], Others=[], SpC=[], SxC=[]),
+        #     IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-10_12-25-50'): SessionCellExclusivityRecord(LxC=[8, 10, 20], LpC=[], Others=[], SpC=[], SxC=[31]),
+        #     IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-09_16-40-54'): SessionCellExclusivityRecord(LxC=[10, 22, 29], LpC=[], Others=[], SpC=[], SxC=[3, 26]),
+        #     IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-10_12-58-3'): SessionCellExclusivityRecord(LxC=[], LpC=[], Others=[], SpC=[], SxC=[24, 42]),
+        #     IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='11-03_12-3-25'): SessionCellExclusivityRecord(LxC=[8], LpC=[], Others=[], SpC=[], SxC=[21, 22]),
+        # }
+
+
+        ## Defined based on 2nd wave of Kamran + Pho Hand-labeling cells - 2025-08-06 15:12 
+        ## Computed using `print(',\n'.join([': '.join([k.get_initialization_code_string(), str(v)]) for k, v in session_cell_exclusivity_annotations.items()]))`
+        session_cell_exclusivity_annotations: Dict[IdentifyingContext, SessionCellExclusivityRecord] = {
+            IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='one',session_name='2006-6-08_14-26-15'): SessionCellExclusivityRecord(LxC=[8, 97, 109], LpC=[], Others=[], SpC=[67, 52, 60], SxC=[4, 13, 23, 58]),
+            IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='one',session_name='2006-6-09_1-22-43'): SessionCellExclusivityRecord(LxC=[3, 5, 29, 103], LpC=[23, 38, 63], Others=[], SpC=[33, 58, 62, 69, 100], SxC=[16, 35, 55]),
+            IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='one',session_name='2006-6-12_15-55-31'): SessionCellExclusivityRecord(LxC=[3, 34], LpC=[2, 3, 34], Others=[], SpC=[27, 31, 53], SxC=[30, 33]),
+            IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-07_16-40-19'): SessionCellExclusivityRecord(LxC=[], LpC=[], Others=[], SpC=[], SxC=[3, 18, 19, 65]),
+            IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-08_21-16-25'): SessionCellExclusivityRecord(LxC=[90], LpC=[23, 73], Others=[], SpC=[4, 16, 82], SxC=[8]),
+            IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-09_22-24-40'): SessionCellExclusivityRecord(LxC=[91, 95], LpC=[15, 16, 32], Others=[], SpC=[11], SxC=[]),
+            IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-12_16-53-46'): SessionCellExclusivityRecord(LxC=[38, 59], LpC=[51, 60], Others=[], SpC=[40], SxC=[7, 8]),
+            IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-09_17-29-30'): SessionCellExclusivityRecord(LxC=[], LpC=[4, 6, 17, 28, 12], Others=[], SpC=[21, 31], SxC=[41]),
+            IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-10_12-25-50'): SessionCellExclusivityRecord(LxC=[19, 23], LpC=[20], Others=[], SpC=[], SxC=[29, 36]),
+            IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-09_16-40-54'): SessionCellExclusivityRecord(LxC=[12, 14, 17, 25], LpC=[], Others=[], SpC=[], SxC=[30]),
+            IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-10_12-58-3'): SessionCellExclusivityRecord(LxC=[14, 30, 32], LpC=[40], Others=[], SpC=[42], SxC=[]),
+            IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='11-02_17-46-44'): SessionCellExclusivityRecord(LxC=[8, 27], LpC=[10], Others=[], SpC=[18, 20, 40], SxC=[17]),
+            IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='11-02_19-28-0'): SessionCellExclusivityRecord(LxC=[27], LpC=[8, 13], Others=[], SpC=[], SxC=[]),
+            IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='11-03_12-3-25'): SessionCellExclusivityRecord(LxC=[8, 24, 25], LpC=[], Others=[], SpC=[], SxC=[13, 22, 28]),
+            IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='fet11-01_12-58-54'): SessionCellExclusivityRecord(LxC=[6, 10, 16, 19], LpC=[14, 31], Others=[], SpC=[24], SxC=[]),
         }
+
+
         return session_cell_exclusivity_annotations
 
 
             
     @classmethod
-    def get_hardcoded_specific_session_override_dict(cls) -> dict:
+    def get_hardcoded_specific_session_override_dict(cls, debug_print:bool=False) -> dict:
         """ ## Create a dictionary of overrides that have been specified manually for a given session:
             # Used in `build_lap_only_short_long_bin_aligned_computation_configs`
             History: Extracted from `neuropy.core.session.Formats.Specific.KDibaOldDataSessionFormat` 
@@ -748,19 +749,76 @@ class UserAnnotationsManager(HDFMixin, AttrsBasedClassHelperMixin):
         user_annotations[IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-26_13-51-50')] = dict(unit_grid_bin_bounds=(((0.12884392935982347, 0.8711479028697573), (0.4287341963762006, 0.4508472184892227))), cm_grid_bin_bounds=(((37.0773897438341, 250.69004399129707), (123.37674715861888, 129.74020675948856))))
         user_annotations[IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-28_12-38-13')] = dict(unit_grid_bin_bounds=(((0.12884392935982347, 0.8711479028697573), (0.43365665079857674, 0.4538040709459968))), cm_grid_bin_bounds=(((37.0773897438341, 250.69004399129707), (124.79328080534583, 130.59109955280485))))
         user_annotations[IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-28_17-6-14')] = dict(unit_grid_bin_bounds=(((0.12884392935982347, 0.8711479028697573), (0.4279922589909162, 0.447893978892636))), cm_grid_bin_bounds=(((37.0773897438341, 250.69004399129707), (123.16323999738597, 128.89035363816865))))
-
+        
         # ================================================================================================================================================================================ #
         # Override with the absolute outermost grid_bin_bounds [0.0, 1.0]                                                                                                                  #
         # ================================================================================================================================================================================ #
         pix2cm: float = 287.7697841726619
         real_unit_x_grid_bin_bounds = np.array([0.0, 1.0])
         real_cm_x_grid_bin_bounds = (real_unit_x_grid_bin_bounds * pix2cm)
+        if debug_print:
+            print(f'real_unit_x_grid_bin_bounds: {real_unit_x_grid_bin_bounds}')
+            print(f'real_cm_x_grid_bin_bounds: {real_cm_x_grid_bin_bounds}')
+
+        # real_unit_y_grid_bin_bounds = np.array([0.4, 0.6])
+        real_unit_y_grid_bin_bounds = np.array([0.3, 0.7])
+        real_cm_y_grid_bin_bounds = (real_unit_y_grid_bin_bounds * pix2cm)
+        if debug_print:
+            print(f'real_unit_y_grid_bin_bounds: {real_unit_y_grid_bin_bounds}')
+            print(f'real_cm_y_grid_bin_bounds: {real_cm_y_grid_bin_bounds}')
+
+
+        # ==================================================================================================================== #
+        # 2025-02-12 15:17 Lab - Finally think I fixed it -- explicitly set the `grid_bin` (`pf_params.grid_bin`) desired                               #
+        # ==================================================================================================================== #
+
+        # 'computation_config.pf_params.grid_bin': (3.819259898065432, 1.3611823623005381),
+        # 'computation_config.pf_params.grid_bin_bounds': ((0.0, 287.7697841726619), (86.33093525179856, 201.4388489208633)),
+
+        # grid_bin = (2.0, 2.0) # (2cm x 2cm)
+        # grid_bin = (1.5, 1.5) # (1.5cm x 1.5cm)
+        
+
+
+        # # 2025-02-12 Lab Computer ____________________________________________________________________________________________ #
+        # real_unit_x_grid_bin_bounds: [0 1]
+        # real_cm_x_grid_bin_bounds: [0 287.77]
+        # real_unit_y_grid_bin_bounds: [0.3 0.7]
+        # real_cm_y_grid_bin_bounds: [86.3309 201.439]
 
         # real_cm_x_grid_bin_bounds # array([0, 287.77])
 
+        real_cm_grid_bin_bounds = (tuple(deepcopy(real_cm_x_grid_bin_bounds)), tuple(deepcopy(real_cm_y_grid_bin_bounds)))
+
+        desired_grid_bin = (2.0, 2.0) # (2cm x 2cm)
+        # desired_grid_bin = (1.5, 1.5) # (1.5cm x 1.5cm)
+        max_allowed_num_bins = [60, 9]
+        (constrained_grid_bin_sizes, constrained_num_grid_bins) = safe_limit_num_grid_bin_values(real_cm_grid_bin_bounds, desired_grid_bin_sizes=desired_grid_bin, max_allowed_num_bins=max_allowed_num_bins, debug_print=False)
+        # constrained_grid_bin_sizes
+        # constrained_num_grid_bins
+
+
+        ## Updates: 'grid_bin_bounds', 'grid_bin', '
         for a_ctxt, a_dict in user_annotations.items():
-            a_dict.update(pix2cm=pix2cm, real_unit_x_grid_bin_bounds=tuple(deepcopy(real_unit_x_grid_bin_bounds)),  real_cm_x_grid_bin_bounds=tuple(deepcopy(real_cm_x_grid_bin_bounds)))
+            # a_dict.update(pix2cm=pix2cm, real_unit_x_grid_bin_bounds=tuple(deepcopy(real_unit_x_grid_bin_bounds)),  real_cm_x_grid_bin_bounds=tuple(deepcopy(real_cm_x_grid_bin_bounds)))
+            a_dict.update(pix2cm=pix2cm, real_unit_grid_bin_bounds=(tuple(deepcopy(real_unit_x_grid_bin_bounds)), tuple(deepcopy(real_unit_y_grid_bin_bounds))),  real_cm_grid_bin_bounds=(tuple(deepcopy(real_cm_x_grid_bin_bounds)), tuple(deepcopy(real_cm_y_grid_bin_bounds))))
+            a_dict.update(grid_bin_bounds=(tuple(deepcopy(real_cm_x_grid_bin_bounds)), tuple(deepcopy(real_cm_y_grid_bin_bounds))))
+            ## Override with the computed `grid_bin`
+            a_dict.update(grid_bin=tuple(deepcopy(constrained_grid_bin_sizes))) ## 2025-02-12 16:16 adds working `grid_bin`
+            
+
+        
         ## override with the "real" bounds
+        
+
+    
+        # ==================================================================================================================== #
+        # Bapun Annotations 2025-02-26 11:07                                                                                   #
+        # ==================================================================================================================== #
+        user_annotations[IdentifyingContext(format_name='bapun',animal='RatN', session_name='Day4OpenField')] = dict(unit_grid_bin_bounds=(((0.0, 1.0), (0.0, 1.0))), cm_grid_bin_bounds=(((-120.0, 120.0), (-120.0, 120.0))))
+        # user_annotations[IdentifyingContext(format_name='bapun',animal='RatN', session_name='Day4OpenField')].update(track_start_t=8.9677370000004, track_end_t=1139.771152)
+
+
 
         # ==================================================================================================================== #
         # 2024-11-05 16:05 Produced programmatically from exported matlab csv                                                 #
@@ -828,6 +886,8 @@ class UserAnnotationsManager(HDFMixin, AttrsBasedClassHelperMixin):
         user_annotations[IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='fet11-01_12-58-54')].update(track_start_t=13.4352230000004, track_end_t=3031.404034)
         user_annotations[IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='fet11-03_20-28-3')].update(track_start_t=16.0465110000005, track_end_t=1085.451218)
         user_annotations[IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='fet11-04_21-20-3')].update(track_start_t=8.9677370000004, track_end_t=1139.771152)
+        
+
 
         return user_annotations
 
@@ -853,13 +913,13 @@ class UserAnnotationsManager(HDFMixin, AttrsBasedClassHelperMixin):
             # IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-08_21-16-25'), # 2024-10-04 - has long placefields outside of the possible bounds on the short track for some reason?!?!
             # IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-09_22-24-40'), # 2024-10-04 - has long placefields outside of the possible bounds on the short track for some reason?!?!
             IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-12_16-53-46'),
-            IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-09_17-29-30'),
-            IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-10_12-25-50'),
+            # IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-09_17-29-30'),
+            # IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-10_12-25-50'), # 2025-08-22 - Decided to discard because the positions are shifted between 'x' and 'lin_pos', and that manifests on the pf peaks.
             IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-09_16-40-54'),
-            IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-10_12-58-3'),
-            # IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='11-02_19-28-0'), # 2024-10-04 - has long placefields outside of the possible bounds on the short track for some reason?!?!
+            # IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-10_12-58-3'), # 2025-08-22 - Decided that this session is bad. The context decoder returns short for nearly all non-lap period pre-delta, and additionally there aren't many replays.
+            # IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='11-02_19-28-0'), # 2024-10-04 - has long placefields outside of the possible bounds on the short track for some reason?!?! Has horrible noise.
             IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='11-03_12-3-25'),
-            IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='fet11-01_12-58-54'), # 2024-10-04 - very bad position tracking data (jumping around everywhere at high frequency)
+            # IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='fet11-01_12-58-54'), # 2024-10-04 - very bad position tracking data (jumping around everywhere at high frequency)
         ]
         return [v for v in good_sessions if (v not in bad_sessions)]
 
@@ -886,6 +946,8 @@ class UserAnnotationsManager(HDFMixin, AttrsBasedClassHelperMixin):
             IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='one',session_name='2006-6-07_11-26-53'), # ONLY ONE SHORT LAP
             IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-08_21-16-25'), # 2024-10-04 - has long placefields outside of the possible bounds on the short track for some reason?!?!
             IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='two',session_name='2006-6-09_22-24-40'), # 2024-10-04 - has long placefields outside of the possible bounds on the short track for some reason?!?!
+            IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-10_12-25-50'), # 2025-08-22 - Decided to discard because the positions are shifted between 'x' and 'lin_pos', and that manifests on the pf peaks.
+            IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-10_12-58-3'), # 2025-08-22 - Decided that this session is bad. The context decoder returns short for nearly all non-lap period pre-delta, and additionally there aren't many replays.
             IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-10_21-2-40'),
             IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-11_15-16-59'),
             IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-12_14-39-31'),
@@ -899,6 +961,7 @@ class UserAnnotationsManager(HDFMixin, AttrsBasedClassHelperMixin):
             IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-26_13-22-13'),
             IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-28_12-17-27'),
             IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-28_16-48-29'),
+            IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='one',session_name='2006-4-09_17-29-30'), #TODO 2025-07-16 17:36: - [ ] Failed Wave1 - FailedWave3 -- DO NOT USE
             IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-10_19-11-57'),
             IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-12_14-59-23'),
             IdentifyingContext(format_name='kdiba',animal='vvp01',exper_name='two',session_name='2006-4-18_15-38-2'),
@@ -911,6 +974,7 @@ class UserAnnotationsManager(HDFMixin, AttrsBasedClassHelperMixin):
             IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='11-19_13-2-0'),
             IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='11-19_13-55-7'),
             IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='fet11-03_11-0-53'),
+            IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='fet11-01_12-58-54'), # 2024-10-04 - very bad position tracking data (jumping around everywhere at high frequency)
             IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='redundant'),
             IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='showclus'),
             IdentifyingContext(format_name='kdiba',animal='pin01',exper_name='one',session_name='sleep'),
@@ -961,7 +1025,58 @@ class UserAnnotationsManager(HDFMixin, AttrsBasedClassHelperMixin):
         Return custom-tweaked laps_df objects for each session
         
         """
-        laps_override_dict = {IdentifyingContext(format_name= 'kdiba', animal= 'gor01', exper_name= 'one', session_name= '2006-6-09_1-22-43'): pd.DataFrame(np.array([[45.196, 50.87, 1],
+        laps_override_dict = {
+        IdentifyingContext(format_name= 'kdiba', animal= 'gor01', exper_name= 'one', session_name= '2006-6-07_11-26-53'): np.array([ # 2025-07-15 11:24 
+            [5.25043, 13.6923, 0],
+            [29.3087, 39.605, 1],
+            [59.2954, 68.282, 0],
+            [77.4918, 122.04, 1],
+            [124.951, 134.515, 0],
+            [271.219, 283.64, 1],
+            [294.795, 314.111, 0],
+            [460.01, 473.534, 1],
+            [504.844, 510.159, 0],
+            [735.084, 763.285, 0],
+            [777.095, 783.436, 0],
+            [836.815, 854.473, 1],
+            [867.186, 875.428, 0],
+            [881.669, 902.443, 1],
+            [927.481, 933.586, 0],
+            [951.239, 961.672, 1],
+            [970.525, 978.899, 0],
+            [1006.23, 1014.04, 1],
+            [1021.21, 1028.25, 0],
+            [1045.17, 1058.39, 1],
+            [1073.19, 1080.3, 0],
+            [1105.66, 1117.97, 1],
+            [1126.15, 1132.42, 0],
+            [1157.15, 1165.33, 1],
+            [1173.43, 1179.37, 0],
+            [1193.11, 1202.7, 1],
+            [1209.07, 1215.3, 0],
+            [1285.74, 1295.08, 1],
+            [1307.4, 1313.27, 0],
+            [1321.68, 1333.42, 1],
+            [1359.88, 1366.66, 0],
+            [1395.59, 1402.36, 1],
+            [1418.98, 1424.95, 0],
+            [1441.16, 1447.04, 1],
+            [1455.11, 1462.25, 0],
+            [1477.2, 1483.38, 1],
+            [1488.65, 1494.72, 0],
+            [1542.37, 1553.14, 1],
+            [1562.93, 1568.89, 0],
+            [1576.45, 1588.34, 1],
+            [1598.02, 1604.89, 0],
+            [1628.13, 1635.14, 1],
+            [1651.8, 1658.45, 0],
+            [1684.53, 1692.26, 1],
+            [1704.81, 1711.1, 0],
+            [1897.9, 1917.66, 1],
+            [1925.68, 1931.79, 1]]
+       ),
+
+        IdentifyingContext(format_name= 'kdiba', animal= 'gor01', exper_name= 'one', session_name= '2006-6-09_1-22-43'):np.array([[45.196, 50.87, 1],
             [65.785, 72.223, 0],
             [84.3034, 91.0442, 1],
             [106.426, 112.965, 0],
@@ -1042,97 +1157,11 @@ class UserAnnotationsManager(HDFMixin, AttrsBasedClassHelperMixin):
             [1620.12, 1625.62, 1],
             [1628.79, 1632.6, 0],
             [1648.42, 1652.35, 1],
-            [1654.45, 1658.09, 0]]), columns=['start', 'stop', 'lap_dir']),
-            
-        IdentifyingContext(format_name= 'kdiba', animal= 'gor01', exper_name= 'one', session_name= '2006-6-08_14-26-15'): pd.read_csv(pd.io.common.StringIO("""lap_dir,start,stop,lap_id,label,duration,is_LR_dir
-1,5.635866999975406,17.447765000048093,1,1,11.811898000072688,False
-0,31.862535999971442,39.770308000035584,2,2,7.907772000064142,True
-1,135.80169799993746,144.17555499996524,3,3,8.373857000027783,False
-0,161.4588249999797,167.33178999996744,4,4,5.872964999987744,True
-1,234.46598300000187,239.80664900003467,5,5,5.3406660000327975,False
-0,255.12084700004198,262.6961649999721,6,6,7.575317999930121,True
-1,294.02620700001717,299.79996099998243,7,7,5.773753999965265,False
-0,314.0474329999415,319.38541200000327,8,8,5.33797900006175,True
-1,499.299262000015,504.80590599996503,9,9,5.506643999950029,False
-0,511.57918999996036,518.3528040000238,10,10,6.7736140000633895,True
-1,530.199254999985,540.6408469999442,11,11,10.4415919999592,False
-0,558.3601999999955,565.501454000012,12,12,7.141254000016488,True
-1,584.3530060000485,591.2602979999501,13,13,6.907291999901645,False
-0,599.2680110000074,604.7399410000071,14,14,5.471929999999702,True
-1,616.8189990000101,625.727688999963,15,15,8.908689999952912,False
-0,645.746662999969,655.190166000044,16,16,9.443503000074998,True
-1,678.3138549999567,684.6877630000236,17,17,6.373908000066876,False
-0,692.4283270000014,697.5663149999455,18,18,5.137987999944016,True
-1,712.481599999941,721.7247290000087,19,19,9.24312900006771,False
-0,734.3370720000239,741.1781630000332,20,20,6.841091000009328,True
-1,750.487770000007,755.2237429999514,21,21,4.735972999944352,False
-0,763.1330900000175,768.9713500000071,22,22,5.838259999989532,True
-1,782.2524370000465,788.223720000009,23,23,5.971282999962568,False
-0,804.7419039999368,812.1489890000084,24,24,7.407085000071675,True
-1,825.6948009999469,832.2362539999885,25,25,6.541453000041656,False
-0,848.6870399999898,853.6917289999546,26,26,5.004688999964856,True
-1,923.8948460000101,933.7045569999609,27,27,9.809710999950767,False
-0,941.8459550000262,951.4563309999648,28,28,9.610375999938697,True
-1,971.8437469999772,983.9541530000279,29,29,12.110406000050716,False
-0,997.2021759999916,1002.3064310000045,30,30,5.104255000012927,True
-1,1010.4823659999529,1024.6630880000303,31,31,14.180722000077367,False
-0,1035.5080799999414,1040.7457459999714,32,32,5.2376660000300035,True
-1,1052.4248229999794,1059.730979999993,33,33,7.306157000013627,False
-0,1068.0394739999902,1074.3457179999677,34,34,6.306243999977596,True
-1,1086.991663999972,1093.5664510000497,35,35,6.574787000077777,False
-0,1104.6100650000153,1110.1174780000001,36,36,5.507412999984808,True
-1,1123.5293059999822,1130.4037480000407,37,37,6.87444200005848,False
-0,1163.4365710000275,1167.773696999997,38,38,4.33712599996943,True
-1,1179.0186919999542,1187.2274109999416,39,39,8.208718999987468,False
-0,1195.0345380000072,1203.6432979999809,40,40,8.6087599999737,True
-1,1237.7116199999582,1244.5174689999549,41,41,6.80584899999667,False
-0,1258.365557000041,1265.4391260000411,42,42,7.073569000000134,True
-1,1330.5371880000457,1336.310314000002,43,43,5.773125999956392,False
-0,1342.8171239999356,1346.2877180000069,44,44,3.470594000071287,True
-1,1362.870562999975,1367.0071159999352,45,45,4.136552999960259,False
-0,1380.2544739999576,1383.9256560000358,46,46,3.671182000078261,True
-1,1394.3353489999427,1400.441819999949,47,47,6.106471000006422,False
-0,1405.6136730000144,1409.8513090000488,48,48,4.237636000034399,True
-1,1414.9546381260086,1422.2641620000359,49,49,7.3095238740272634,False
-0,1431.5052300000098,1436.0117869999958,50,50,4.50655699998606,True
-1,1551.660543999984,1559.00272400002,51,51,7.342180000036024,False
-0,1561.971652999986,1566.9768959999783,52,52,5.005242999992333,True
-1,1574.6518530000467,1583.2598350000335,53,53,8.607981999986805,False
-0,1588.5318210000405,1591.8683739999542,54,54,3.3365529999136925,True
-1,1603.6802609999431,1610.3193350000074,55,55,6.639074000064284,False
-0,1610.7875860000495,1617.4933869999368,56,56,6.705800999887288,True
-1,1627.471716,1633.009618000011,57,57,5.537902000010945,False
-0,1637.848449000041,1643.719982999959,58,58,5.871533999918029,True
-1,1649.8277859999798,1655.666550999973,59,59,5.8387649999931455,False
-0,1665.0759609999368,1669.513353999937,60,60,4.4373930000001565,True
-1,1678.8888199999928,1683.2932070000097,61,61,4.404387000016868,False
-0,1692.6359879999654,1697.442268999992,62,62,4.806281000026502,True
-1,1706.9501839999575,1711.1219170000404,63,63,4.171733000082895,False
-0,1714.8241269999417,1721.3978409999982,64,64,6.573714000056498,True
-1,1743.6891189999878,1748.7596530000446,65,65,5.070534000056796,False
-0,1751.995573000051,1756.3667059999425,66,66,4.371132999891415,True
-1,1894.741761000012,1900.6687579180325,67,67,5.92699691802045,False
-0,1903.1162605429095,1907.0515169999562,68,68,3.935256457046762,True
-1,1919.0648307943793,1923.4020180000225,69,69,4.337187205643204,False
-0,1928.8740830000024,1933.5788669999456,70,70,4.704783999943174,True
-1,1939.6858200000133,1946.085425317191,71,71,6.399605317177702,False
-0,1958.341463665913,1963.8412795937784,72,72,5.499815927865484,True
-1,1971.9844929999672,1977.4574609999545,73,73,5.472967999987304,False
-0,1982.9787533012063,1987.9983583562782,74,74,5.0196050550719065,True
-1,1998.978808999993,2002.0378515068257,75,75,3.0590425068328386,False
-0,2004.686371095765,2008.2873499999987,76,76,3.6009789042336706,True
-1,2019.1314589999383,2023.6986021875962,77,77,4.567143187657848,False
-0,2027.367351700315,2031.3787389999488,78,78,4.011387299633725,True
-1,2037.6175029999577,2042.2889639999485,79,79,4.671460999990813,False
-0,2057.637436000048,2068.848791999975,80,80,11.211355999927036,True""")),
+            [1654.45, 1658.09, 0]]),
         }
 
 
-        # pd.read_csv(pd.io.common.StringIO(csv_text))
-    
-        ## Bad/Icky Bimodal Cells:
-        # return {k:pd.DataFrame(v, columns=['start', 'stop', 'lap_dir']) for k, v in laps_override_dict.items()}
-        return laps_override_dict
+        return {k:pd.DataFrame(v, columns=['start', 'stop', 'lap_dir']) for k, v in laps_override_dict.items()}
 
 
 
@@ -1142,7 +1171,7 @@ class UserAnnotationsManager(HDFMixin, AttrsBasedClassHelperMixin):
         
     @function_attributes(short_name=None, tags=['utility', 'importer', 'batch', 'matlab_mat_file', 'multi-session', 'grid_bin_bounds'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2024-04-10 07:41', related_items=[])
     @classmethod
-    def batch_build_user_annotation_grid_bin_bounds_from_exported_position_info_mat_files(cls, search_parent_path: Path, platform_side_length: float = 22.0, debug_print=False):
+    def batch_build_user_annotation_grid_bin_bounds_from_exported_position_info_mat_files(cls, search_parent_path: Path, platform_side_length: float = 22.0, print_user_annotations_lines_to_add:bool=True, debug_print=False):
         """ finds all *.position_info.mat files recurrsively in the search_parent_path, then try to load them and parse their parent directory as a session to build an IdentifyingContext that can be used as a key in UserAnnotations.
         
         Builds a list of grid_bin_bounds user annotations that can be pasted into `specific_session_override_dict`
@@ -1212,28 +1241,21 @@ class UserAnnotationsManager(HDFMixin, AttrsBasedClassHelperMixin):
                             # from_mat_lims_grid_bin_bounds: BoundsRect = deepcopy(from_mat_cm_lims_grid_bin_bounds)
                             # _updated_config_dict['new_grid_bin_bounds'] = from_mat_lims_grid_bin_bounds.extents ## how it used to be pre 2025-01-14 16:58 
                             
-
                             _updated_config_dict['new_cm_grid_bin_bounds'] = from_mat_cm_lims_grid_bin_bounds.extents
                             _updated_config_dict['new_unit_grid_bin_bounds'] = from_mat_unit_lims_grid_bin_bounds.extents
-                            
-
+                        
 
                             ## 2025-01-14 16:58 Use Unit-length Grid bin bounds:
                             from_mat_lims_grid_bin_bounds: BoundsRect = deepcopy(from_mat_unit_lims_grid_bin_bounds)
                             _updated_config_dict['new_grid_bin_bounds'] = _updated_config_dict['new_unit_grid_bin_bounds'] # 2025-01-14 16:58 - switch to unit scale bounds
                              
                             ## Build Update:
-
-
                             # curr_active_pipeline.sess.config.computation_config['pf_params'].grid_bin_bounds = new_grid_bin_bounds
 
                             active_context = _test_session_context # curr_active_pipeline.get_session_context()
                             final_context = active_context.adding_context_if_missing(user_annotation='grid_bin_bounds')
                             user_annotations[final_context] = from_mat_lims_grid_bin_bounds.extents
                             
-
-
-
                             # Updates the context. Needs to generate the code.
 
                             ## Generate code to insert int user_annotations:
@@ -1255,9 +1277,10 @@ class UserAnnotationsManager(HDFMixin, AttrsBasedClassHelperMixin):
                         pass
                         
         # loaded_configs
+        if print_user_annotations_lines_to_add:
+            print('Add the following code to UserAnnotationsManager.get_user_annotations() function body:')
+            print('\n'.join(_out_user_annotations_add_code_lines))
 
-        print('Add the following code to UserAnnotationsManager.get_user_annotations() function body:')
-        print('\n'.join(_out_user_annotations_add_code_lines))
         return _out_user_annotations_add_code_lines, loaded_configs
 
     # @classmethod

@@ -2,10 +2,12 @@ from typing import Dict, List, Tuple, Optional, Callable, Union, Any, NewType, T
 from typing_extensions import TypeAlias
 from copy import deepcopy
 import numpy as np
+import nptyping as ND
 from nptyping import NDArray
 import pandas as pd
 import attrs
-from neuropy.utils.mixins.AttrsClassHelpers import AttrsBasedClassHelperMixin, custom_define, serialized_field, serialized_attribute_field, non_serialized_field, keys_only_repr, SimpleFieldSizesReprMixin
+from attrs import define, field, Factory
+from neuropy.utils.mixins.AttrsClassHelpers import AttrsBasedClassHelperMixin, custom_define, serialized_field, serialized_attribute_field, non_serialized_field, keys_only_repr, shape_only_repr, array_values_preview_repr, SimpleFieldSizesReprMixin
 from neuropy.utils.mixins.HDF5_representable import HDF_DeserializationMixin, post_deserialize, HDF_SerializationMixin, HDFMixin
 
     
@@ -39,8 +41,97 @@ def get_bin_edges(bin_centers):
     out.append(last_edge_bin) # append the last_edge_bin to the bins.
     return np.array(out)
 
-@custom_define(slots=False, repr=False, eq=False)
-class BinningInfo(SimpleFieldSizesReprMixin, HDF_SerializationMixin, AttrsBasedClassHelperMixin):
+
+@custom_define(slots=False, eq=False)
+class DebugBinningInfo(HDF_SerializationMixin, AttrsBasedClassHelperMixin):
+    """ A comparable object to hold all the binning releated info for comparing different binnings in time/space/ncells
+    
+    from neuropy.utils.mixins.binning_helpers import DebugBinningInfo
+    
+    """
+    n_xbin_edges: int = serialized_attribute_field(is_computable=False)
+    n_ybin_edges: int = serialized_attribute_field(is_computable=False)
+    ndim: int = serialized_attribute_field(is_computable=False)
+    nFlatPositionBins: int = serialized_attribute_field(init=False, is_computable=True) ## computable
+ 
+    nCells: Optional[int] = serialized_attribute_field(is_computable=False, default=None)
+    nTimeBins: Optional[int] = serialized_attribute_field(is_computable=False, default=None)
+ 
+
+    @property
+    def nTotalFlatAllTimebins(self) -> int:
+        """The total size of a flat matrix, determines how large the computation for decoding a posterior would be."""
+        total: int = self.nFlatPositionBins
+        if (self.nCells is not None):
+            total *= self.nCells
+        if self.nTimeBins is not None:
+            total *= self.nTimeBins
+        return total
+
+
+    @property
+    def dims_coord_tuple(self) -> Tuple:
+        """Returns a tuple containing the number of bins in each dimension. For 1D it will be (n_xbins,) for 2D (n_xbins, n_ybins) 
+        TODO 2023-03-08 19:31: - [ ] Add to parent class (PfND) since it should have the same implementation.
+        """
+        dims_size_list = [(self.n_xbin_edges-1), ]
+        if self.n_ybin_edges is not None:
+            dims_size_list.append((self.n_ybin_edges-1))
+        if (self.nCells is not None):
+            dims_size_list.append(self.nCells)
+        if self.nTimeBins is not None:
+            dims_size_list.append(self.nTimeBins)
+        return tuple(*dims_size_list)
+
+    def __attrs_post_init__(self):
+        self.nFlatPositionBins = ((self.n_xbin_edges-1) * (self.n_ybin_edges-1)) if (self.ndim == 2) else (self.n_xbin_edges-1) # Number of position bins in flattened 1D representation
+
+    ## For serialization/pickling:
+    def __getstate__(self):
+        # Copy the object's state from self.__dict__ which contains all our instance attributes. Always use the dict.copy() method to avoid modifying the original state.
+        state = self.__dict__.copy()
+        return state
+
+    def __setstate__(self, state):
+        # super(BinningInfo, self).__init__() # Call the superclass __init__() (from https://stackoverflow.com/a/48325758)
+        self.__dict__.update(state)
+        
+
+    
+class GridBinDebuggableMixin:
+    """ A mixin for a class that has a bin_indicies attribute that can be used to bin data.
+
+    Usage:
+        from neuropy.utils.mixins.binning_helpers import GridBinDebuggableMixin, DebugBinningInfo
+
+    """
+    def get_debug_binning_info(self) -> DebugBinningInfo:
+        """Returns relevant debug info about the binning configuration
+
+        Returns:
+            DebugBinningInfo: Contains binning dimensions and sizes
+        """
+        raise NotImplementedError("This method must be implemented in the subclass")
+        # n_xbin_edges = len(self.xbin)
+        # n_ybin_edges = len(self.ybin) if self.ybin is not None else 0
+        # ndim = self.ndim
+        # nCells = len(self.ratemap.neuron_ids)
+        # nTimeBins = len(self.filtered_pos_df)
+        # # nFlatPositionBins = ((n_xbin_edges-1) * (n_ybin_edges-1)) if (ndim == 2) else (n_xbin_edges-1) # Number of position bins in flattened 1D representation
+    
+        # return DebugBinningInfo(
+        # 	n_xbin_edges=n_xbin_edges,
+        # 	n_ybin_edges=n_ybin_edges, 
+        # 	ndim=ndim,
+        # 	nCells=nCells,
+        # 	nTimeBins=nTimeBins,
+        # 	# nFlatPositionBins=nFlatPositionBins
+        # )
+
+
+ 
+@custom_define(slots=False, repr=True, eq=False)
+class BinningInfo(HDF_SerializationMixin, AttrsBasedClassHelperMixin):
     """ Factored out of pyphocorehelpers.indexing_helpers.BinningInfo
     
     2024-08-07: refactored from `dataclass` to attrs
@@ -51,10 +142,10 @@ class BinningInfo(SimpleFieldSizesReprMixin, HDF_SerializationMixin, AttrsBasedC
         from neuropy.utils.mixins.binning_helpers import BinningInfo, BinningContainer
     
     """
-    variable_extents: Tuple = serialized_field(is_computable=False) # serialized_field
-    step: float = serialized_attribute_field(is_computable=False)
-    num_bins: int = serialized_attribute_field(is_computable=False)
-    bin_indicies: NDArray = serialized_field(init=False, repr=False, is_computable=True, metadata={'shape':('num_bins',)}) # , eq=attrs.cmp_using(eq=np.array_equal)
+    variable_extents: Tuple[float, float] = serialized_field(is_computable=False, repr=True) # serialized_field
+    step: float = serialized_attribute_field(is_computable=False, repr=True)
+    num_bins: int = serialized_attribute_field(is_computable=False, repr=True)
+    bin_indicies: NDArray = serialized_field(init=False, repr=shape_only_repr, is_computable=True, metadata={'shape':('num_bins',)}) # , eq=attrs.cmp_using(eq=np.array_equal)
     
     def _validate_variable_extents(self):
         variable_extents = deepcopy(self.variable_extents)
@@ -81,6 +172,16 @@ class BinningInfo(SimpleFieldSizesReprMixin, HDF_SerializationMixin, AttrsBasedC
         assert len(self.bin_indicies) == self.num_bins, f"len(self.bin_indicies): {len(self.bin_indicies)} does not equal self.num_bins: {self.num_bins}!! Something is wrong"
         # self.num_bins = len(self.bin_indicies) # update from bin_indicies
     
+
+    @classmethod
+    def combining(cls, lhs: "BinningInfo", rhs: "BinningInfo") -> "BinningInfo":
+        variable_extents = (min(lhs.variable_extents[0], rhs.variable_extents[0]), max(lhs.variable_extents[1], rhs.variable_extents[1]))
+        assert lhs.step == rhs.step, f"lhs.step: {lhs.step} != rhs.step: {rhs.step}"
+        step = lhs.step
+        num_bins: int = lhs.num_bins + rhs.num_bins
+        bin_indicies = lhs.bin_indicies + rhs.bin_indicies
+        return cls(variable_extents=variable_extents, step=step, num_bins=num_bins, bin_indicies=bin_indicies) ## return a joined copy
+    
     
     # @property
     # def bin_indicies(self) -> NDArray:
@@ -103,8 +204,8 @@ class BinningInfo(SimpleFieldSizesReprMixin, HDF_SerializationMixin, AttrsBasedC
 
 
 
-@custom_define(slots=False, repr=False, eq=False)
-class BinningContainer(SimpleFieldSizesReprMixin, HDF_SerializationMixin, AttrsBasedClassHelperMixin):
+@custom_define(slots=False, repr=False , eq=False)
+class BinningContainer(HDF_SerializationMixin, AttrsBasedClassHelperMixin):
     """A container that allows accessing either bin_edges (self.edges) or bin_centers (self.centers) 
     Factored out of pyphocorehelpers.indexing_helpers.BinningContainer
     
@@ -129,17 +230,16 @@ class BinningContainer(SimpleFieldSizesReprMixin, HDF_SerializationMixin, AttrsB
     
 
     """
-    edges: NDArray = serialized_field(repr=False, is_computable=True, metadata={'shape':('num_bins+1',)})
-    centers: NDArray = serialized_field(repr=False, is_computable=True, metadata={'shape':('num_bins',)})
+    edges: NDArray = serialized_field(repr=array_values_preview_repr, is_computable=True, metadata={'shape':('num_bins+1',)})
+    centers: NDArray = serialized_field(repr=array_values_preview_repr, is_computable=True, metadata={'shape':('num_bins',)})
     
-    edge_info: BinningInfo = serialized_field(is_computable=True)
-    center_info: BinningInfo = serialized_field(is_computable=False)
+    edge_info: BinningInfo = serialized_field(is_computable=True, repr=True)
+    center_info: BinningInfo = serialized_field(is_computable=False, repr=True)
     
     @property
     def num_bins(self) -> int:
         return self.center_info.num_bins
         # return len(self.centers)`
-
 
     @property
     def left_edges(self) -> NDArray:
@@ -182,7 +282,7 @@ class BinningContainer(SimpleFieldSizesReprMixin, HDF_SerializationMixin, AttrsB
             
             
     @classmethod
-    def build_edge_binning_info(cls, edges: NDArray):
+    def build_edge_binning_info(cls, edges: NDArray) -> BinningInfo:
         # Otherwise try to reverse engineer edge_info
         try:
             actual_window_size = edges[2] - edges[1] # if at least 3 bins long, safer to use the 2nd and 3rd bin to determine the actual_window_size
@@ -196,22 +296,27 @@ class BinningContainer(SimpleFieldSizesReprMixin, HDF_SerializationMixin, AttrsB
         return BinningInfo(variable_extents=variable_extents, step=actual_window_size, num_bins=len(edges))
     
     @classmethod
-    def build_center_binning_info(cls, centers: NDArray, variable_extents):
+    def build_center_binning_info(cls, centers: NDArray, variable_extents: Tuple[float, float]) -> BinningInfo:
         # Otherwise try to reverse engineer center_info
-        assert len(centers) > 1, f"centers must be of at least length 2 to re-derive center_info, but it is of length {len(centers)}. centers: {centers}\n\tCannot continue!"
-            
-        try:
-            # The very end bins can be slightly different sizes occasionally, so if our list is longer than length 2 use the differences in the points after the left end.
-            actual_window_size = centers[2] - centers[1]
-        except IndexError as e:
-            # For lists of length 2, use the only bins we have
-            actual_window_size = None
-            assert len(centers) == 2, f"centers must be of at least length 2 to re-derive center_info, but it is of length {len(centers)}. centers: {centers}\n\tIndexError e: {e}"
-            actual_window_size = centers[1] - centers[0]
-        except Exception as e:
-            raise
-            # step = variable_extents.step # could use
-    
+        assert len(variable_extents) == 2, f"len(variable_extents) should be 2 but variable_extents: {variable_extents}"
+        if len(centers) > 1:
+            try:
+                # The very end bins can be slightly different sizes occasionally, so if our list is longer than length 2 use the differences in the points after the left end.
+                actual_window_size = centers[2] - centers[1]
+            except IndexError as e:
+                # For lists of length 2, use the only bins we have
+                actual_window_size = None
+                assert len(centers) == 2, f"centers must be of at least length 2 to re-derive center_info, but it is of length {len(centers)}. centers: {centers}\n\tIndexError e: {e}"
+                actual_window_size = centers[1] - centers[0]
+            except Exception as e:
+                raise
+                # step = variable_extents.step # could use
+        else:
+            ## equal to 1, use variable extents
+            # assert len(centers) > 1, f"centers must be of at least length 2 to re-derive center_info, but it is of length {len(centers)}. centers: {centers}\n\tCannot continue!" # 2025-03-20 16:58 Used to just assert
+            actual_window_size = variable_extents[1] - variable_extents[0]
+            assert actual_window_size > 0, f"there must be some difference in extents to determine window size. variable_extents: {variable_extents}"
+
         return BinningInfo(variable_extents=deepcopy(variable_extents), step=actual_window_size, num_bins=len(centers))
     
     @classmethod
@@ -245,6 +350,35 @@ class BinningContainer(SimpleFieldSizesReprMixin, HDF_SerializationMixin, AttrsB
         
         return cls(edges=edges, edge_info=edge_info, centers=centers, center_info=center_info)
 
+
+    def __repr__(self):
+        """Custom multi-line representation for BinningContainer
+        renders like:
+        ```
+        BinningContainer(edges=shape=(3,) - [42.65807735896669, 42.68307735896669, ..., 42.70807735896669],
+            centers=shape=(2,) - [42.670577358966696, 42.69557735896669],
+            edge_info=BinningInfo(variable_extents=(42.65807735896669, 42.690456222509965), step=0.025, num_bins=3, bin_indicies=shape=(3,)),
+            center_info=BinningInfo(variable_extents=(42.65807735896669, 42.690456222509965), step=0.024999999999991473, num_bins=2, bin_indicies=shape=(2,)))
+        ```
+
+        """
+        # Get the string representations of each field
+        n_decimals: int = 6
+        edges_repr = array_values_preview_repr(self.edges, ndecimals=n_decimals)
+        centers_repr = array_values_preview_repr(self.centers, ndecimals=n_decimals)
+        edge_info_repr = repr(self.edge_info)
+        center_info_repr = repr(self.center_info)
+        
+        # Format with indentation and line breaks
+        return (f"BinningContainer(\n"
+                f"    edges={edges_repr},\n"
+                f"    centers={centers_repr},\n"
+                f"    edge_info={edge_info_repr},\n"
+                f"    center_info={center_info_repr}\n"
+                f")")
+    
+
+
 def compute_spanning_bins(variable_values, num_bins:int=None, bin_size:float=None, variable_start_value:float=None, variable_end_value:float=None) -> Tuple[NDArray, BinningInfo]:
     """Extracted from pyphocorehelpers.indexing_helpers import compute_position_grid_size for use in BaseDataSessionFormats
 
@@ -265,6 +399,7 @@ def compute_spanning_bins(variable_values, num_bins:int=None, bin_size:float=Non
         BinningInfo: information about how the binning was performed
         
     Usage:
+        from neuropy.utils.mixins.binning_helpers import compute_spanning_bins
         ## Binning with Fixed Number of Bins:    
         xbin_edges, xbin_edges_binning_info = compute_spanning_bins(pos_df.x.to_numpy(), bin_size=active_config.computation_config.grid_bin[0]) # bin_size mode
         print(xbin_edges_binning_info)
@@ -346,7 +481,7 @@ def build_spanning_grid_matrix(x_values, y_values, debug_print=False):
     return all_entries_matrix, flat_all_entries_matrix, original_data_shape
 
 
-class BinnedPositionsMixin(object):
+class BinnedPositionsMixin(GridBinDebuggableMixin):
     """ Adds common accessors for convenince properties such as *bin_centers/*bin_labels
     
     Requires (Implementor Must Provide):
@@ -377,6 +512,15 @@ class BinnedPositionsMixin(object):
             return self.ybin[:-1] + np.diff(self.ybin) / 2
 
     @property
+    def zbin_centers(self) -> Optional[NDArray]:
+        """ the z-position of the centers of each xbin. Note that there is (n_ybins - 1) of these. """
+        if self.zbin is None:
+            return None
+        else:
+            return self.zbin[:-1] + np.diff(self.zbin) / 2
+        
+
+    @property
     def xbin_labels(self) -> NDArray:
         """ the labels of each xbin center. Starts at 1!"""
         return np.arange(start=1, stop=len(self.xbin)) # bin labels are 1-indexed, thus adding 1
@@ -388,6 +532,16 @@ class BinnedPositionsMixin(object):
             return None
         else:
             return np.arange(start=1, stop=len(self.ybin))
+        
+
+    @property
+    def zbin_labels(self) -> Optional[NDArray]:
+        """ the labels of each ybin center. Starts at 1!"""
+        if self.zbin is None:
+            return None
+        else:
+            return np.arange(start=1, stop=len(self.zbin))
+        
 
     @property
     def n_xbin_edges(self) -> int:
@@ -401,6 +555,15 @@ class BinnedPositionsMixin(object):
             return None
         else:
              return len(self.ybin)
+        
+    @property
+    def n_zbin_edges(self) -> Optional[int]:
+        """ the number of zbin edges. """
+        if self.zbin is None:
+            return None
+        else:
+             return len(self.zbin)
+        
 
     @property
     def n_xbin_centers(self) -> int:
@@ -414,25 +577,74 @@ class BinnedPositionsMixin(object):
             return None
         else:
              return (len(self.ybin) - 1) # the -1 is to get the counts for the centers only
+        
+    @property
+    def n_zbin_centers(self) -> Optional[int]:
+        """ the number of zbin (centers). Note that there is (n_ybin_edges - 1) of these. """
+        if self.zbin is None:
+            return None
+        else:
+             return (len(self.zbin) - 1) # the -1 is to get the counts for the centers only
+        
 
-            
-    
     @property
     def dims_coord_tuple(self):
-        """Returns a tuple containing the number of bins in each dimension. For 1D it will be (n_xbins,) for 2D (n_xbins, n_ybins) 
+        """Returns a tuple containing the number of bins in each dimension. For 1D it will be (n_xbins,) for 2D (n_xbins, n_ybins), for 3D (n_xbins, n_ybins, n_zbins) 
         TODO 2023-03-08 19:31: - [ ] Add to parent class (PfND) since it should have the same implementation.
         """
         n_xbins = len(self.xbin) - 1 # the -1 is to get the counts for the centers only
-        if (self.ndim > 1):
-            n_ybins = len(self.ybin) - 1 # the -1 is to get the counts for the centers only
-            dims_coord_ist = (n_xbins, n_ybins)
-        else:
+        if (self.ndim == 1):
             # 1D Only
             n_ybins = None # singleton dimension along this axis. Decide how we want to shape it.
+            n_zbins = None
             dims_coord_ist = (n_xbins,)
+                        
+        elif (self.ndim == 2):
+            n_ybins = len(self.ybin) - 1 # the -1 is to get the counts for the centers only
+            n_zbins = None
+            dims_coord_ist = (n_xbins, n_ybins)
+            
+        elif (self.ndim == 3):
+            n_ybins = len(self.ybin) - 1 # the -1 is to get the counts for the centers only
+            n_zbins = len(self.zbin) - 1 # the -1 is to get the counts for the centers only
+            dims_coord_ist = (n_xbins, n_ybins, n_zbins)
+            
+        else:
+            raise ValueError(f'no implementation for ndim: {self.ndim} greater than 3')
+        
         return dims_coord_ist
 
+    @property
+    def n_flattened_position_bins(self) -> int:
+        """ the number of xbin edges. """
+        return np.sum(self.dims_coord_tuple)
+    
+    # ==================================================================================================================== #
+    # GridBinDebuggableMixin Conformances                                                                                  #
+    # ==================================================================================================================== #
+    def get_debug_binning_info(self) -> DebugBinningInfo:
+        """Returns relevant debug info about the binning configuration
 
+        Returns:
+            DebugBinningInfo: Contains binning dimensions and sizes
+        """  
+        # n_xbin_edges = len(self.xbin)
+        # n_ybin_edges = len(self.ybin) if self.ybin is not None else 0
+        # ndim = self.ndim
+        # nCells = len(self.ratemap.neuron_ids)
+        # nTimeBins = len(self.filtered_pos_df)
+        # nFlatPositionBins = ((n_xbin_edges-1) * (n_ybin_edges-1)) if (ndim == 2) else (n_xbin_edges-1) # Number of position bins in flattened 1D representation
+    
+        return DebugBinningInfo(
+            n_xbin_edges=self.n_xbin_edges,
+            n_ybin_edges=self.n_ybin_edges, 
+            ndim=self.ndim,
+            # nCells=nCells,
+            # nTimeBins=nTimeBins,
+            # nFlatPositionBins=nFlatPositionBins
+        )
+    
+    
 
 
 def bin_pos_nD(x: NDArray, y: NDArray, num_bins=None, bin_size=None):
@@ -497,6 +709,68 @@ def bin_pos_nD(x: NDArray, y: NDArray, num_bins=None, bin_size=None):
         return xbin, ybin, bin_info_out_dict # {'mode':mode, 'xstep':xstep, 'ystep':ystep, 'xnum_bins':xnum_bins, 'ynum_bins':ynum_bins}
 
 
+def safe_limit_num_grid_bin_values(fixed_grid_bin_bounds: Tuple[Tuple[float, float], Tuple[float, float]], desired_grid_bin_sizes: Tuple[float, float], max_allowed_num_bins: Optional[Tuple[int, int]]=None, debug_print:bool=True) -> Tuple[Tuple[float, float], Tuple[int, int]]:
+    """ 
+    given the fixed `correct_grid_bin_bounds` and a `desired_grid_bin_sizes`, determines the num bins needed and if max_allowed_num_bins is provided will limit num grid bins to this size and return the required grid_bin sizes to meet this bound
+    
+    Usage:
+    
+        from neuropy.utils.mixins.binning_helpers import bin_pos_nD
+        from pyphoplacecellanalysis.SpecificResults.PendingNotebookCode import get_hardcoded_known_good_grid_bin_bounds
+        from neuropy.utils.mixins.binning_helpers import safe_limit_num_grid_bin_values
+
+
+        correct_grid_bin_bounds = get_hardcoded_known_good_grid_bin_bounds(curr_active_pipeline) # ((0.0, 287.7697841726619), (86.33093525179856, 201.4388489208633))
+        desired_grid_bin = (2.0, 2.0) # (2cm x 2cm)
+        # desired_grid_bin = (1.5, 1.5) # (1.5cm x 1.5cm)
+        (constrained_grid_bin_sizes, constrained_num_grid_bins) = safe_limit_num_grid_bin_values(correct_grid_bin_bounds, desired_grid_bin_sizes=desired_grid_bin, max_allowed_num_bins=[58, 7], debug_print=True)
+        constrained_grid_bin_sizes
+        constrained_num_grid_bins
+
+
+    """
+    num_bin_keys_names_list = ['xnum_bins', 'ynum_bins']
+    grid_bin_size_keys_names_list = ['xstep', 'ystep']
+
+    proposed_xbin, proposed_ybin, proposed_bin_info = bin_pos_nD(*fixed_grid_bin_bounds, bin_size=desired_grid_bin_sizes) # bin_size mode - {'mode': 'bin_size', 'xstep': 2.0, 'xnum_bins': 145, 'ystep': 2.0, 'ynum_bins': 59}
+    if debug_print:
+        print(f"proposed_bin_info: {proposed_bin_info}")
+
+    proposed_nbins: Tuple[float, float] = [proposed_bin_info[k] for k in num_bin_keys_names_list]
+    if debug_print:
+        print(f'proposed_nbins: {proposed_nbins}')
+
+    if max_allowed_num_bins is not None:
+        if debug_print:
+            print(f'max_allowed_num_bins: {max_allowed_num_bins}')
+        constrained_num_grid_bins = [min(proposed_bin_info[k], a_max_allowed_n_bins) for k, a_max_allowed_n_bins in zip(num_bin_keys_names_list, max_allowed_num_bins)]
+        if debug_print:
+            print(f'constrained_nbins: {constrained_num_grid_bins}') # constrained_nbins: [58, 7]
+
+        ## compute the reverse `grid_bin` values required to get the num bins in `constrained_nbins`:
+        # Binning with Fixed Number of Bins:
+        constrained_xbin, constrained_ybin, constrained_bin_info = bin_pos_nD(*fixed_grid_bin_bounds, num_bins=constrained_num_grid_bins) # {'mode': 'num_bins', 'xstep': 5.138746145940391, 'xnum_bins': 57, 'ystep': 19.184652278177456, 'ynum_bins': 7}
+        if debug_print:
+            print(f"constrained_bin_info: {constrained_bin_info}")
+
+        constrained_grid_bin_sizes = [constrained_bin_info[k] for k in grid_bin_size_keys_names_list]
+    else:
+        ## no constraint on max num bins:
+        constrained_grid_bin_sizes = desired_grid_bin_sizes
+        constrained_num_grid_bins = proposed_nbins
+        
+    if debug_print:
+        print(f'constrained_grid_bin: {constrained_grid_bin_sizes}') # constrained_grid_bin: [5.048592704783542, 19.184652278177456]
+        
+    if not isinstance(constrained_grid_bin_sizes, tuple):
+        constrained_grid_bin_sizes = tuple(constrained_grid_bin_sizes) ## convert to tuple for comparison
+    if not isinstance(constrained_num_grid_bins, tuple):
+        constrained_num_grid_bins = tuple(constrained_num_grid_bins) ## convert to tuple for comparison
+
+    return constrained_grid_bin_sizes, constrained_num_grid_bins
+
+
+
 
 ## Add Binned Position Columns to spikes_df:
 def build_df_discretized_binned_position_columns(active_df, bin_values=(None, None), position_column_names = ('x', 'y'), binned_column_names = ('binned_x', 'binned_y'),
@@ -558,7 +832,7 @@ def build_df_discretized_binned_position_columns(active_df, bin_values=(None, No
             curr_bins = curr_dim_bin_values
             # bin_info = None  # bin_info is None for pre-computed values
             updated_combined_bin_infos['mode'] = 'provided'
-            updated_combined_bin_infos['step'].append((curr_bins[1]-curr_bins[0]))
+            updated_combined_bin_infos['step'].append((curr_bins[1]-curr_bins[0])) # IndexError: index 1 is out of bounds for axis 0 with size 1 -- only has 1 bin ... [0, ] - 2025-01-15 06:32 - SOLVED: this occured when I was accidentally specifying grid_bin_bounds as a single tuple instead of a pair of two tuples (for the x & y))
             updated_combined_bin_infos['num_bins'].append(len(curr_bins))
             
             if debug_print:

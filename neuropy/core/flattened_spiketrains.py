@@ -1,5 +1,8 @@
 from collections import OrderedDict
-from typing import Sequence, Union
+from typing import Dict, List, Tuple, Sequence, Optional, Callable, Union, Any
+import nptyping as ND
+from nptyping import NDArray
+
 # from warnings import warn
 import logging
 
@@ -10,11 +13,12 @@ import pandas as pd
 import h5py
 from copy import deepcopy
 
+
 from neuropy.core.neuron_identities import NeuronExtendedIdentity, NeuronType
 from neuropy.utils.mixins.binning_helpers import BinningInfo # for add_binned_time_column
 from neuropy.utils.mixins.print_helpers import ProgressMessagePrinter
 from .datawriter import DataWriter
-from neuropy.utils.mixins.time_slicing import StartStopTimesMixin, TimeSlicableObjectProtocol, TimeSlicableIndiciesMixin, TimeSlicedMixin
+from neuropy.utils.mixins.time_slicing import StartStopTimesMixin, TimeSlicableObjectProtocol, TimeSlicableIndiciesMixin, TimeSlicedMixin, TimePointEventAccessor
 from neuropy.utils.mixins.unit_slicing import NeuronUnitSlicableObjectProtocol
 from neuropy.utils.mixins.concatenatable import ConcatenationInitializable
 from neuropy.utils.mixins.AttrsClassHelpers import AttrsBasedClassHelperMixin, serialized_field, serialized_attribute_field, non_serialized_field
@@ -25,7 +29,7 @@ _REQUIRE_FLAT_SPIKE_INDEX_COLUMN: bool = False
 
 
 @pd.api.extensions.register_dataframe_accessor("spikes")
-class SpikesAccessor(TimeSlicedMixin):
+class SpikesAccessor(TimeSlicedMixin, TimePointEventAccessor):
     """ Part of the December 2021 Rewrite of the neuropy.core classes to be Pandas DataFrame based and easily manipulatable """
     __time_variable_name = 't_rel_seconds' # currently hardcoded
     
@@ -53,9 +57,14 @@ class SpikesAccessor(TimeSlicedMixin):
                 raise AttributeError(f"Must have 'flat_spike_idx' column.. obj.columns: {list(obj.columns)}")
             else:
                 print(f"This used to be an assert but `_REQUIRE_FLAT_SPIKE_INDEX_COLUMN == False, so continuing at your own risk. Missing the 'flat_spike_idx' column. obj.columns: {list(obj.columns)}")
+                
+        ## CONDITION FOR TimePointEventAccessor CONFORMANCE
         if "t" not in obj.columns and "t_seconds" not in obj.columns and "t_rel_seconds" not in obj.columns:
             raise AttributeError("Must have at least one time column: either 't' and 't_seconds', or 't_rel_seconds'.")
         
+    # ==================================================================================================================== #
+    # TimePointEventAccessor CONFORMANCE                                                                                   #
+    # ==================================================================================================================== #
     @property
     def time_variable_name(self):
         return self.__time_variable_name
@@ -81,6 +90,7 @@ class SpikesAccessor(TimeSlicedMixin):
         """
         return self._obj[self.time_variable_name].values
 
+    # END TimePointEventAccessor CONFORMANCE _____________________________________________________________________________ #
     @property
     def neuron_ids(self):
         """ return the unique cell identifiers (given by the unique values of the 'aclu' column) for this DataFrame """
@@ -92,6 +102,13 @@ class SpikesAccessor(TimeSlicedMixin):
         """ returns a list of NeuronExtendedIdentity tuples where the first element is the shank_id and the second is the cluster_id. Returned in the same order as self.neuron_ids """
         # groupby the multi-index [shank, cluster]:
         # shank_cluster_grouped_spikes_df = self._obj.groupby(['shank','cluster'])
+        if 'shank' not in self._obj.columns:
+            self._obj['shank'] = -1
+        if 'cluster' not in self._obj.columns:
+            self._obj['cluster'] = -1
+        if 'qclu' not in self._obj.columns:
+            self._obj['qclu'] = -1
+
         aclu_grouped_spikes_df = self._obj.groupby(['aclu'])
         shank_cluster_reference_df = aclu_grouped_spikes_df[['aclu','shank','cluster','qclu']].first() # returns a df indexed by 'aclu' with only the 'shank' and 'cluster' columns
         # output_tuples_list = [NeuronExtendedIdentityTuple(an_id.shank, an_id.cluster, an_id.aclu) for an_id in shank_cluster_reference_df.itertuples()] # returns a list of tuples where the first element is the shank_id and the second is the cluster_id. Returned in the same order as self.neuron_ids
@@ -100,15 +117,15 @@ class SpikesAccessor(TimeSlicedMixin):
 
 
     @property
-    def n_total_spikes(self):
+    def n_total_spikes(self) -> int:
         return np.shape(self._obj)[0]
 
     @property
-    def n_neurons(self):
+    def n_neurons(self) -> int:
         return len(self.neuron_ids)
     
     
-    def get_split_by_unit(self, included_neuron_ids=None):
+    def get_split_by_unit(self, included_neuron_ids=None) -> List[pd.DataFrame]:
         """ returns a list containing the spikes dataframe split by the 'aclu' column. """
         # self.neuron_ids is the list of 'aclu' values found in the spikes_df table.
         if included_neuron_ids is None:
@@ -121,7 +138,7 @@ class SpikesAccessor(TimeSlicedMixin):
             included_neuron_ids = self.neuron_ids
         return self._obj[self._obj['aclu'].isin(included_neuron_ids)] ## restrict to only the shared aclus for both short and long
         
-    def get_unit_spiketrains(self, included_neuron_ids=None):
+    def get_unit_spiketrains(self, included_neuron_ids=None) -> NDArray:
         """ returns an array of the spiketrains (an array of the times that each spike occured) for each unit """
         return np.asarray([a_unit_spikes_df[self.time_variable_name].to_numpy() for a_unit_spikes_df in self.get_split_by_unit(included_neuron_ids=included_neuron_ids)])
         
@@ -154,12 +171,12 @@ class SpikesAccessor(TimeSlicedMixin):
         return self._obj.loc[inclusion_mask, :].copy()
 
 
-
-
-
     def extract_unique_neuron_identities(self):
         """ Tries to build information about the unique neuron identitiies from the (highly reundant) information in the spikes_df. """
-        selected_columns = ['aclu', 'shank', 'cluster', 'qclu', 'neuron_type']
+        selected_columns = ['aclu', 'shank', 'cluster', 'qclu', 'neuron_type']        
+        selected_columns = [col for col in selected_columns if col in self._obj.columns]
+        assert len(selected_columns) > 0
+        assert 'aclu' in selected_columns
         unique_rows_df = self._obj[selected_columns].drop_duplicates().reset_index(drop=True).sort_values(by='aclu') # Based on only these columns, remove all repeated rows. Since every spike from the same aclu must have the same values for all the rest of the values, there should only be one row for each aclu. 
         assert len(unique_rows_df) == self.n_neurons, f"if this were false that would suggest that there are multiple entries for aclus. n_neurons: {self.n_neurons}, {len(unique_rows_df) =}"
         return unique_rows_df
@@ -179,14 +196,38 @@ class SpikesAccessor(TimeSlicedMixin):
     # ==================================================================================================================== #
     
     # sets the 'x','y' positions by interpolating over a position data frame
-    def interpolate_spike_positions(self, position_sampled_times, position_x, position_y, position_linear_pos=None, position_speeds=None):
-        spike_timestamp_column_name=self.time_variable_name
-        self._obj['x'] = np.interp(self._obj[spike_timestamp_column_name], position_sampled_times, position_x)
-        self._obj['y'] = np.interp(self._obj[spike_timestamp_column_name], position_sampled_times, position_y)
+    def interpolate_spike_positions(self, position_sampled_times, position_x, position_y, position_linear_pos=None, position_speeds=None, spike_timestamp_column_name=None, replace_existing:bool=False, **position_additional_variables_dict):
+        """ Adds interpolated position properties to each spike in the spikes_df
+        
+        Usage:
+            global_pos = deepcopy(global_session.position)
+            pos_df: pd.DataFrame = global_pos.adding_hairy_curve_normal_dir_columns()
+            global_spikes_df: pd.DataFrame = get_proper_global_spikes_df(curr_active_pipeline)
+            global_spikes_df = global_spikes_df.spikes.interpolate_spike_positions(pos_df['t'], pos_df['x'], pos_df['y'], **{k:pos_df[k].to_numpy() for k in ['normal_dir_unit_t', 'normal_dir_unit_x']})
+            global_spikes_df
+        """
+        if spike_timestamp_column_name is None:
+            spike_timestamp_column_name = self.time_variable_name
+        else:
+            assert spike_timestamp_column_name in self._obj
+            
+        if position_x is not None:
+            if ('x' not in self._obj) or replace_existing:
+                self._obj['x'] = np.interp(self._obj[spike_timestamp_column_name], position_sampled_times, position_x)
+        if position_y is not None:
+            if ('y' not in self._obj) or replace_existing:
+                self._obj['y'] = np.interp(self._obj[spike_timestamp_column_name], position_sampled_times, position_y)
         if position_linear_pos is not None:
-            self._obj['lin_pos'] = np.interp(self._obj[spike_timestamp_column_name], position_sampled_times, position_linear_pos)
+            if ('lin_pos' not in self._obj) or replace_existing:
+                self._obj['lin_pos'] = np.interp(self._obj[spike_timestamp_column_name], position_sampled_times, position_linear_pos)
         if position_speeds is not None:
-            self._obj['speed'] = np.interp(self._obj[spike_timestamp_column_name], position_sampled_times, position_speeds)
+            if ('speed' not in self._obj) or replace_existing:
+                self._obj['speed'] = np.interp(self._obj[spike_timestamp_column_name], position_sampled_times, position_speeds)
+
+        for a_var_name, a_var_arr in position_additional_variables_dict.items():
+            assert len(a_var_arr) == len(position_sampled_times)
+            if (a_var_name not in self._obj) or replace_existing:
+                self._obj[a_var_name] = np.interp(self._obj[spike_timestamp_column_name], position_sampled_times, a_var_arr)
         return self._obj
     
     def add_same_cell_ISI_column(self):
@@ -272,25 +313,89 @@ class SpikesAccessor(TimeSlicedMixin):
             print("\t done updating 'fragile_linear_neuron_IDX' and 'neuron_IDX'.")
         return self._obj
 
-    def add_binned_time_column(self, time_window_edges, time_window_edges_binning_info:BinningInfo, debug_print:bool=False):
+    def add_binned_time_column(self, time_window_edges: NDArray, time_window_edges_binning_info:BinningInfo, debug_print:bool=False): ## CONFORMANCE: TimePointEventAccessor
         """ adds a 'binned_time' column to spikes_df given the time_window_edges and time_window_edges_binning_info provided 
         
         """
-        spike_timestamp_column_name = self.time_variable_name # 't_rel_seconds'
+        spike_timestamp_column_name: str = self.time_variable_name # 't_rel_seconds'
         if debug_print:
             print(f'self._obj[time_variable_name]: {np.shape(self._obj[spike_timestamp_column_name])}\ntime_window_edges: {np.shape(time_window_edges)}')
             # assert (np.shape(out_digitized_variable_bins)[0] == np.shape(self._obj)[0]), f'np.shape(out_digitized_variable_bins)[0]: {np.shape(out_digitized_variable_bins)[0]} should equal np.shape(self._obj)[0]: {np.shape(self._obj)[0]}'
             print(time_window_edges_binning_info)
 
-        # bin_labels = time_window_edges_binning_info.bin_indicies[1:] # edge bin indicies: [0,     1,     2, ..., 11878, 11879, 11880][1:] -> [ 1,     2, ..., 11878, 11879, 11880]
-        bin_labels = time_window_edges_binning_info.bin_indicies[:-1] ## typical 0-based indexing - 2025-01-13 16:11 
+        bin_labels = time_window_edges_binning_info.bin_indicies[1:] # edge bin indicies: [0,     1,     2, ..., 11878, 11879, 11880][1:] -> [ 1,     2, ..., 11878, 11879, 11880]
         self._obj['binned_time'] = pd.cut(self._obj[spike_timestamp_column_name].to_numpy(), bins=time_window_edges, include_lowest=True, labels=bin_labels) # same shape as the input data (time_binned_self._obj: (69142,))
-        
-        assert (np.nanmax(self._obj['binned_time']) < len(time_window_edges)), f"there should be no values above the number of edges, but there are! np.nanmax(self._obj['binned_time']): {np.nanmax(self._obj['binned_time'])}, len(time_window_edges): {len(time_window_edges)}"
-        
         return self._obj
 
-    def adding_lap_identity_column(self, laps_epoch_df, epoch_id_key_name:str='new_lap_IDX'):
+
+    # @function_attributes(short_name=None, tags=['time-binning'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2025-03-10 10:13', related_items=[])
+    def compute_unit_time_binned_spike_counts(self, time_bin_edges: NDArray, included_neuron_ids: Optional[NDArray[ND.Shape["N_ACLUS"], ND.Int]]=None) -> Tuple[NDArray[ND.Shape["N_ACLUS, N_TIME_BINS"], ND.Int], NDArray[ND.Shape["N_ACLUS"], ND.Int]]:
+        """ Computes the number of neurons in each spike time bin (specified by time_bin_edges) and threshold based on some criteria
+
+        Usage:    
+            time_bin_edges: NDArray = deepcopy(results1D.continuous_results['global'].time_bin_edges[0])
+            spikes_df: pd.DataFrame = deepcopy(get_proper_global_spikes_df(curr_active_pipeline))
+            unit_specific_time_binned_spike_counts, included_neuron_ids = spikes_df.spikes.compute_unit_time_binned_spike_counts(time_bin_edges=time_bin_edges)
+            
+        """
+        spike_timestamp_column_name: str = self.time_variable_name # 't_rel_seconds'
+        spikes_df: pd.DataFrame = deepcopy(self._obj)
+        if included_neuron_ids is None:
+            unique_units: NDArray[ND.Shape["N_ACLUS"], ND.Int] = np.unique(spikes_df['aclu']) # sorted
+            included_neuron_ids = unique_units
+            
+        unit_specific_time_binned_spike_counts: NDArray[ND.Shape["N_ACLUS, N_TIME_BINS"], ND.Int] = np.array([
+            np.histogram(spikes_df.loc[spikes_df['aclu'] == unit, spike_timestamp_column_name], bins=time_bin_edges)[0]
+            for unit in included_neuron_ids
+        ])
+        # unit_specific_time_binned_spike_counts # .shape (n_aclus, n_time_bins)
+        return unit_specific_time_binned_spike_counts, included_neuron_ids
+    
+        
+        
+    # @function_attributes(short_name=None, tags=['unit-spike-counts', 'mask', 'time-bin', 'spikes'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2025-03-04 10:09', related_items=[])
+    def compute_unit_time_binned_spike_counts_and_mask(self, time_bin_edges: NDArray[ND.Shape["N_TIME_BINS"], Any], included_neuron_ids: Optional[NDArray[ND.Shape["N_ACLUS"], ND.Int]]=None, min_num_spikes_per_bin_to_be_considered_active:int=1, min_num_unique_active_neurons_per_time_bin:int=3) -> Tuple[NDArray[ND.Shape["N_ACLUS, N_TIME_BINS"], ND.Int], NDArray[ND.Shape["N_ACLUS"], ND.Int], Tuple[NDArray[ND.Shape["N_TIME_BINS"], Any], NDArray[ND.Shape["N_TIME_BINS"], Any], NDArray[ND.Shape["1, N_TIME_BINS, 4"], np.uint8]]]:
+        """ Computes the number of neurons in each spike time bin (specified by time_bin_edges) and threshold based on some criteria
+
+        Usage:    
+            from pyphoplacecellanalysis.SpecificResults.PendingNotebookCode import compute_unit_time_binned_spike_counts_and_mask
+            
+            time_bin_edges: NDArray = deepcopy(results1D.continuous_results['global'].time_bin_edges[0])
+            spikes_df: pd.DataFrame = deepcopy(get_proper_global_spikes_df(curr_active_pipeline))
+            unit_specific_time_binned_spike_counts, unique_units, (is_time_bin_active, inactive_mask, mask_rgba) = spikes_df.spikes.compute_unit_time_binned_spike_counts_and_mask(time_bin_edges=time_bin_edges)
+            
+        """
+        spikes_df: pd.DataFrame = deepcopy(self._obj)
+        if included_neuron_ids is None:
+            unique_units: NDArray[ND.Shape["N_ACLUS"], ND.Int] = np.unique(spikes_df['aclu']) # sorted
+            included_neuron_ids = unique_units
+        
+        unit_specific_time_binned_spike_counts, included_neuron_ids = self.compute_unit_time_binned_spike_counts(time_bin_edges=time_bin_edges, included_neuron_ids=included_neuron_ids)        
+        # unit_specific_time_binned_spike_counts # .shape (n_aclus, n_time_bins)
+        total_spikes_per_time_bin = np.sum(unit_specific_time_binned_spike_counts, axis=0)
+        unique_active_cells_per_time_bin = np.sum((unit_specific_time_binned_spike_counts >= min_num_spikes_per_bin_to_be_considered_active), axis=0)
+
+        ## OUTPUTS: total_spikes_per_time_bin, unique_active_cells_per_time_bin
+        # require 3 neurons to fire in a timebin for it to be considered active.
+
+        is_time_bin_active: NDArray[ND.Shape["N_TIME_BINS"], Any] = (unique_active_cells_per_time_bin >= min_num_unique_active_neurons_per_time_bin)
+
+        ## OUTPUTS: is_time_bin_active - a bool that specifies whether each time bin is active (included) or not. If it's not, it should be masked out with a dark black box or something
+
+        ## OUTPUTS: total_spikes_per_time_bin, unique_active_cells_per_time_bin
+        
+        ## INPUTS: is_time_bin_active
+        # Create mask of inactive time bins
+        inactive_mask: NDArray[ND.Shape["N_TIME_BINS"], Any]  = ~is_time_bin_active
+        mask_rgba: NDArray[ND.Shape["1, N_TIME_BINS, 4"], np.uint8] = np.zeros((1, len(is_time_bin_active), 4), dtype=np.uint8)
+        mask_rgba[0, inactive_mask, :] = [0, 0, 0, 200]  # Black with 80% opacity for inactive bins
+
+        ## OUTPUTS: mask_rgba
+        return unit_specific_time_binned_spike_counts, included_neuron_ids, (is_time_bin_active, inactive_mask, mask_rgba)
+
+
+
+    def adding_lap_identity_column(self, laps_epoch_df, epoch_id_key_name:str='new_lap_IDX'):  ## CONFORMANCE: TimePointEventAccessor
         """ Adds the lap IDX column to the spikes df from a set of lap epochs.
 
             spikes: curr_active_pipeline.sess.spikes_df
@@ -316,7 +421,7 @@ class SpikesAccessor(TimeSlicedMixin):
 
 
     def adding_epochs_identity_column(self, epochs_df: pd.DataFrame, epoch_id_key_name:str='temp_epoch_id', epoch_label_column_name=None, override_time_variable_name=None,
-                                      no_interval_fill_value=-1, should_replace_existing_column=False, drop_non_epoch_spikes: bool=False):
+                                      no_interval_fill_value=-1, should_replace_existing_column=False, drop_non_epoch_spikes: bool=False):  ## CONFORMANCE: TimePointEventAccessor
         """ Adds the arbitrary column with name epoch_id_key_name to the dataframe.
 
             spikes: curr_active_pipeline.sess.spikes_df
@@ -331,7 +436,6 @@ class SpikesAccessor(TimeSlicedMixin):
                 active_spikes_df = active_spikes_df.spikes.adding_epochs_identity_column(epochs_df=active_epochs_df, epoch_id_key_name=epoch_id_key_name, epoch_label_column_name='label', override_time_variable_name='t_rel_seconds',
                                                                                         no_interval_fill_value=no_interval_fill_value, should_replace_existing_column=True, drop_non_epoch_spikes=True)
                                                                                         
-
         """
         if (epoch_id_key_name in self._obj.columns) and (not should_replace_existing_column):
             print(f'column "{epoch_id_key_name}" already exists in df! Skipping adding intervals.')
@@ -493,14 +597,8 @@ class FlattenedSpiketrains(HDFMixin, ConcatenationInitializable, NeuronUnitSlica
         return FlattenedSpiketrains(new_df, t_start=new_t_start, metadata=objList[0].metadata)
         
     @staticmethod
-    def interpolate_spike_positions(spikes_df, position_sampled_times, position_x, position_y, position_linear_pos=None, position_speeds=None, spike_timestamp_column_name='t_rel_seconds'):
-        spikes_df['x'] = np.interp(spikes_df[spike_timestamp_column_name], position_sampled_times, position_x)
-        spikes_df['y'] = np.interp(spikes_df[spike_timestamp_column_name], position_sampled_times, position_y)
-        if position_linear_pos is not None:
-            spikes_df['lin_pos'] = np.interp(spikes_df[spike_timestamp_column_name], position_sampled_times, position_linear_pos)
-        if position_speeds is not None:
-            spikes_df['speed'] = np.interp(spikes_df[spike_timestamp_column_name], position_sampled_times, position_speeds)
-        return spikes_df
+    def interpolate_spike_positions(spikes_df: pd.DataFrame, position_sampled_times, position_x, position_y, position_linear_pos=None, position_speeds=None, spike_timestamp_column_name='t_rel_seconds', replace_existing:bool=False, **position_additional_variables_dict):
+        return spikes_df.spikes.interpolate_spike_positions(position_sampled_times, position_x, position_y, position_linear_pos=position_linear_pos, position_speeds=position_speeds, spike_timestamp_column_name=spike_timestamp_column_name, replace_existing=replace_existing, **position_additional_variables_dict)
 
     @staticmethod
     def build_spike_dataframe(active_session, timestamp_scale_factor=(1/1E4), spike_timestamp_column_name='t_rel_seconds', progress_tracing=True):

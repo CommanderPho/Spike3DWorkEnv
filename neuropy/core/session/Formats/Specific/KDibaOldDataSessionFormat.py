@@ -13,6 +13,7 @@ from neuropy.core.session.Formats.SessionSpecifications import SessionFolderSpec
 
 # For specific load functions:
 from neuropy.core import DataWriter, NeuronType, Neurons, BinnedSpiketrain, Mua, ProbeGroup, Position, Epoch, Signal, Laps, FlattenedSpiketrains
+from neuropy.core.laps import LapsAccessor
 from neuropy.utils.load_exported import import_mat_file
 from neuropy.utils.mixins.print_helpers import ProgressMessagePrinter, SimplePrintable, OrderedMeta
 
@@ -21,6 +22,8 @@ from neuropy.utils.efficient_interval_search import get_non_overlapping_epochs, 
 from neuropy.utils.dynamic_container import DynamicContainer
 from neuropy.utils.result_context import IdentifyingContext
 from neuropy.core.user_annotations import UserAnnotationsManager
+from neuropy.core.session.Formats.BaseDataSessionFormats import HardcodedProcessingParameters
+
 
 class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredClass):
     """
@@ -128,6 +131,20 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
 
 
     @classmethod
+    def _get_session_specific_parameters(cls, session_context: IdentifyingContext) -> HardcodedProcessingParameters:
+        """ session-specific type parameters 
+         
+        #TODO 2025-09-20 19:26: - [ ] Is this redudndant with preprocessing parameters?
+        """
+        return IdentifyingContext.matching({ #  Dict[IdentifyingContext, HardcodedProcessingParameters] 
+            ## Fallback defaults:
+            IdentifyingContext(format_name= 'kdiba'): HardcodedProcessingParameters(decoder_building_session_names=['maze1', 'maze2', 'maze'],
+                global_session_name='maze',
+            ),									
+        }, criteria=session_context.get_subset(subset_includelist=session_context._get_session_context_keys()).to_dict())
+
+
+    @classmethod
     def get_known_data_session_type_properties(cls, override_basepath=None, override_parameters_flat_keypaths_dict=None):
         """ returns the session_name for this basedir, which determines the files to load. """
         if override_basepath is not None:
@@ -151,7 +168,13 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
         assert lap_estimation_parameters is not None
 
         use_direction_dependent_laps: bool = lap_estimation_parameters.pop('use_direction_dependent_laps', True)
-        sess.replace_session_laps_with_estimates(**lap_estimation_parameters, should_plot_laps_2d=False) # , time_variable_name=None
+        session_specific_laps_overrides = UserAnnotationsManager.get_hardcoded_laps_override_dict().get(sess.get_context(), None)
+        if session_specific_laps_overrides is None:
+            ## only estimate if there's no override        
+            sess.replace_session_laps_with_estimates(**lap_estimation_parameters, should_plot_laps_2d=False) # , time_variable_name=None
+        else:
+            print(f'\tWARN: using session_specific_laps_overrides for this session and not estimating laps.')
+
         ## add `use_direction_dependent_laps` back in:
         lap_estimation_parameters.use_direction_dependent_laps = use_direction_dependent_laps
 
@@ -160,7 +183,6 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
         if use_direction_dependent_laps:
             print(f'.POSTLOAD_estimate_laps_and_replays(...): WARN: {use_direction_dependent_laps}')
             # TODO: I think this is okay here.
-
 
         # Get the non-lap periods using PortionInterval's complement method:
         non_running_periods = Epoch.from_PortionInterval(sess.laps.as_epoch_obj().to_PortionInterval().complement()) # TODO 2023-05-24- Truncate to session .t_start, .t_stop as currently includes infinity, but it works fine.
@@ -176,8 +198,6 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
         updated_spk_df = sess.compute_spikes_PBEs()
 
         # 2023-05-16 - Replace loaded replays (which are bad) with estimated ones:
-        
-        
         
         # num_pre = session.replay.
         replay_estimation_parameters = sess.config.preprocessing_parameters.epoch_estimation_parameters.replays
@@ -206,6 +226,13 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
         #     'PBEs': PBE_estimation_parameters,
         #     'replays': replay_estimation_parameters
         # }))
+
+
+        # ==================================================================================================================== #
+        # 2025-02-18 - Add the Non-PBE epochs:                                                                                 #
+        # ==================================================================================================================== #
+        new_non_pbe_epochs = sess.compute_non_PBE_epochs(sess, active_parameters=PBE_estimation_parameters, save_on_compute=True)
+        sess.non_pbe = new_non_pbe_epochs
 
         return sess
 
@@ -261,38 +288,16 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
     # ==================================================================================================================== #
     # Computation Configs                                                                                                  #
     # ==================================================================================================================== #
-    
-    @classmethod
-    def build_lap_only_computation_configs(cls, sess, **kwargs):
-        """ sets the computation intervals to only be performed on the laps """
-        active_session_computation_configs = DataSessionFormatBaseRegisteredClass.build_default_computation_configs(sess, **kwargs)
 
-        ## Lap-restricted computation epochs:
-        lap_estimation_parameters = sess.config.preprocessing_parameters.epoch_estimation_parameters.laps
-        assert lap_estimation_parameters is not None
-        use_direction_dependent_laps: bool = lap_estimation_parameters['use_direction_dependent_laps'] # whether to split the laps into left and right directions
-        # print(f'use_direction_dependent_laps: {use_direction_dependent_laps}')
-        desired_computation_epochs = build_lap_computation_epochs(sess, use_direction_dependent_laps=use_direction_dependent_laps)
 
-        # Lap-restricted computation epochs:
-        print(f'\tlen(active_session_computation_configs): {len(active_session_computation_configs)}')
-        final_active_session_computation_configs = []
-        
-        # if len(active_session_computation_configs) < len(desired_computation_epochs):
-        # Clone the configs for each epoch
-        for a_restricted_lap_epoch in desired_computation_epochs:
-            # for each lap to be used as a computation epoch:        
-            for i in np.arange(len(active_session_computation_configs)):
-                curr_config = deepcopy(active_session_computation_configs[i])
-                curr_config.pf_params.computation_epochs = a_restricted_lap_epoch # add the laps epochs to all of the computation configs.
-                final_active_session_computation_configs.append(curr_config)
-        
-        print(f'\tlen(final_active_session_computation_configs): {len(final_active_session_computation_configs)}')
-        return final_active_session_computation_configs
-    
     @classmethod
     def build_lap_only_short_long_bin_aligned_computation_configs(cls, sess, **kwargs):
-        """ 2023-05-16 - sets the computation intervals to only be performed on the laps """
+        """ 2023-05-16 - sets the computation intervals to only be performed on the laps
+        
+        Starts from base of `DataSessionFormatBaseRegisteredClass.build_default_computation_configs(...)`
+        Calls `build_lap_computation_epochs(...)`
+
+        """
         active_session_computation_configs = DataSessionFormatBaseRegisteredClass.build_default_computation_configs(sess, **kwargs)
         
         # Need one computation config for each lap (even/odd)
@@ -315,8 +320,11 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
         # if override_dict.get('unit_grid_bin_bounds', None) is not None:
         #     grid_bin_bounds = override_dict['unit_grid_bin_bounds']
         
-        if override_dict.get('real_cm_x_grid_bin_bounds', None) is not None:
-            grid_bin_bounds = override_dict['real_cm_x_grid_bin_bounds'] ## key to use 'real_cm_x_grid_bin_bounds'
+        # if override_dict.get('real_cm_x_grid_bin_bounds', None) is not None:
+        #     grid_bin_bounds = override_dict['real_cm_x_grid_bin_bounds'] ## key to use 'real_cm_x_grid_bin_bounds'
+        
+        if override_dict.get('real_cm_grid_bin_bounds', None) is not None:
+            grid_bin_bounds = override_dict['real_cm_grid_bin_bounds'] ## key to use 'real_cm_grid_bin_bounds' ((float, float), (float, float))
         else:
             # no overrides present
             raise NotImplementedError
@@ -336,6 +344,11 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
             # # print(f"Add this to `specific_session_override_dict`:\n\n{curr_active_pipeline.get_session_context().get_initialization_code_string()}:dict(grid_bin_bounds=({(grid_bin_bounds[0], grid_bin_bounds[1]), (grid_bin_bounds[2], grid_bin_bounds[3])})),\n")
 
 
+        assert override_dict.get('grid_bin', None) is not None, f"missing grid_bin values: {override_dict}"
+        grid_bin = deepcopy(override_dict['grid_bin']) ## key to use 'real_cm_grid_bin_bounds' ((float, float), (float, float))
+
+            
+
         # Lap-restricted computation epochs:
         if debug_print:
             print(f'\tlen(active_session_computation_configs): {len(active_session_computation_configs)}')
@@ -348,7 +361,11 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
             for i in np.arange(len(active_session_computation_configs)):
                 curr_config = deepcopy(active_session_computation_configs[i])
                 # curr_config.pf_params.time_bin_size = 0.025
-                curr_config.pf_params.grid_bin_bounds = grid_bin_bounds # same bounds for all
+                curr_config.pf_params.grid_bin_bounds = deepcopy(grid_bin_bounds) # same bounds for all
+                curr_config.pf_params.grid_bin = deepcopy(grid_bin) # same grid_bin for all
+
+
+
                 if override_dict.get('track_start_t', None) is not None:
                     track_start_t = override_dict['track_start_t']
                     curr_config.pf_params.track_start_t = track_start_t
@@ -361,7 +378,8 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
                 else:
                     curr_config.pf_params.track_end_t = None
 
-                curr_config.pf_params.grid_bin_bounds = grid_bin_bounds
+                curr_config.pf_params.grid_bin_bounds = deepcopy(grid_bin_bounds)
+                curr_config.pf_params.grid_bin = deepcopy(grid_bin)
                 curr_config.pf_params.computation_epochs = deepcopy(a_restricted_lap_epoch) # add the laps epochs to all of the computation configs.
                 final_active_session_computation_configs.append(curr_config)
                 
@@ -380,7 +398,15 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
             # (1.874, 0.518) # for (128, 128) bins
         """
         active_session_computation_configs = DataSessionFormatBaseRegisteredClass.build_default_computation_configs(sess, **kwargs)
-
+        # ## Get specific grid_bin_bounds overrides from the `cls._specific_session_override_dict`
+        # override_dict = cls.get_specific_session_override_dict().get(sess.get_context(), {})
+        # # assert override_dict.get('real_cm_grid_bin_bounds', None) is not None, f"missing real_cm_grid_bin_bounds values: {override_dict}"
+        # # grid_bin_bounds = deepcopy(override_dict['real_cm_grid_bin_bounds']) ## key to use 'real_cm_grid_bin_bounds' ((float, float), (float, float))
+        # assert override_dict.get('grid_bin_bounds', None) is not None, f"missing grid_bin_bounds values: {override_dict}"
+        # grid_bin_bounds = deepcopy(override_dict['grid_bin_bounds']) ## key to use 'real_cm_grid_bin_bounds' ((float, float), (float, float))
+        # assert override_dict.get('grid_bin', None) is not None, f"missing grid_bin values: {override_dict}"
+        # grid_bin = deepcopy(override_dict['grid_bin']) ## key to use 'real_cm_grid_bin_bounds' ((float, float), (float, float))
+        
         ## Non-restricted computation epochs:
         any_lap_specific_epochs = None
 
@@ -406,10 +432,14 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
 
     @classmethod
     def get_session_spec(cls, session_name) -> SessionFolderSpec:
-        return SessionFolderSpec(required=[SessionFileSpec('{}.xml', session_name, 'The primary .xml configuration file', cls._load_xml_file),
+        return SessionFolderSpec(required_files=[SessionFileSpec('{}.xml', session_name, 'The primary .xml configuration file', cls._load_xml_file),
                                            SessionFileSpec('{}.spikeII.mat', session_name, 'The MATLAB data file containing information about neural spiking activity.', None),
                                            SessionFileSpec('{}.position_info.mat', session_name, 'The MATLAB data file containing the recorded animal positions (as generated by optitrack) over time.', None), # cls.perform_load_position_info_mat_into_session
-                                           SessionFileSpec('{}.epochs_info.mat', session_name, 'The MATLAB data file containing the recording epochs. Each epoch is defined as a: (label:str, t_start: float (in seconds), t_end: float (in seconds))', None)]
+                                           SessionFileSpec('{}.epochs_info.mat', session_name, 'The MATLAB data file containing the recording epochs. Each epoch is defined as a: (label:str, t_start: float (in seconds), t_end: float (in seconds))', None)],
+                                 optional_files=[
+                                        #    SessionFileSpec('{}.laps_info.mat', session_name, 'The MATLAB data file containing the recorded animal positions (as generated by optitrack) over time.', None),
+                                        #    SessionFileSpec('{}.pbe.npy', session_name, 'The MATLAB data file containing the recorded animal positions (as generated by optitrack) over time.', None),
+                                          ],                                           
                                 )
         
     @classmethod
@@ -478,7 +508,7 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
         ## Replays:
         try:
             session, replays_df = cls._default_kdiba_spikeII_load_replays_vars(session, time_variable_name=active_time_variable_name)
-        except BaseException as e:
+        except Exception as e:
             print(f'session.replays could not be loaded from .replay_info.mat due to error {e}. Skipping (will be unavailable)')
         else:
             # Successful!
@@ -907,7 +937,10 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
     
     @classmethod
     def perform_load_position_info_mat_into_session(cls, session_position_mat_file_path: Path, session: DataSession, debug_print:bool=True) -> DataSession:
-        """ must conform to `[Path, DataSession], DataSession` """
+        """ must conform to `[Path, DataSession], DataSession` 
+
+        !! TODO NOTE:: this does not set/use any `.grid_bin_bounds` , only the track limits, which are NOT the same
+        """
         from neuropy.utils.load_exported import import_mat_file
         assert session_position_mat_file_path.exists(), f"session_position_mat_file_path: '{session_position_mat_file_path}' does not exist!"
 
@@ -1105,17 +1138,40 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
             laps_df
         """
         ## Get laps in/out
-        session_laps_mat_file_path = Path(session.basepath).joinpath('{}.laps_info.mat'.format(session.name))
-        laps_mat_file = import_mat_file(mat_import_file=session_laps_mat_file_path)
-        mat_variables_to_extract = ['lap_id','maze_id','start_spike_index', 'end_spike_index', 'start_t', 'end_t', 'start_t_seconds', 'end_t_seconds', 'duration_seconds']
-        num_mat_variables = len(mat_variables_to_extract)
-        flat_var_out_dict = dict()
-        for i in np.arange(num_mat_variables):
-            curr_var_name = mat_variables_to_extract[i]
-            flat_var_out_dict[curr_var_name] = laps_mat_file[curr_var_name].flatten()
-            
-        laps_df = Laps.build_dataframe(flat_var_out_dict, time_variable_name=time_variable_name, absolute_start_timestamp=session.config.absolute_start_timestamp)  # 1014937 rows × 11 columns
-        session.laps = Laps(laps_df) # new DataFrame-based approach
+        override_laps_df: Optional[pd.DataFrame] = UserAnnotationsManager.get_hardcoded_laps_override_dict().get(session.get_context(), None)
+        if override_laps_df is not None:
+            ## use the override
+            print(f'\t using UserAnnotationsManager.get_hardcoded_laps_override_dict() laps for session laps!')    
+            print(f'\toverriding laps....')
+            laps_df: pd.DataFrame = deepcopy(override_laps_df) ## copy the override_laps_df to laps_df
+            laps_df = laps_df.laps_accessor.update_computed_columns(
+                # t_start=t_start, t_delta=t_delta, t_end=t_end,
+                global_session=session, replace_existing=True,
+            )
+            laps_df = laps_df.laps_accessor.filter_to_valid()
+            # laps_df['lap_id'] = laps_df.index + 1
+            # laps_df['label'] = laps_df.index
+            override_laps_obj: Laps = Laps(laps=laps_df)
+            # override_laps_obj.update_lap_dir_from_net_displacement(pos_input=session.position)
+            laps_df = override_laps_obj.to_dataframe()
+            session.laps = deepcopy(override_laps_obj) # new DataFrame-based approach
+
+        else:
+            ## use the .mat file approach
+            session_laps_mat_file_path = Path(session.basepath).joinpath('{}.laps_info.mat'.format(session.name))
+            laps_mat_file = import_mat_file(mat_import_file=session_laps_mat_file_path)
+            mat_variables_to_extract = ['lap_id', 'maze_id','start_spike_index', 'end_spike_index', 'start_t', 'end_t', 'start_t_seconds', 'end_t_seconds', 'duration_seconds']
+            num_mat_variables = len(mat_variables_to_extract)
+            flat_var_out_dict = dict()
+            for i in np.arange(num_mat_variables):
+                curr_var_name = mat_variables_to_extract[i]
+                flat_var_out_dict[curr_var_name] = laps_mat_file[curr_var_name].flatten()
+                
+            laps_df: pd.DataFrame = LapsAccessor.init_dataframe_from_mat_loaded_dict(flat_var_out_dict, time_variable_name=time_variable_name, absolute_start_timestamp=session.config.absolute_start_timestamp,
+                                                               global_session=session,
+                                                               )  # 1014937 rows × 11 columns
+            session.laps = Laps(laps_df) # new DataFrame-based approach        
+
         return session, laps_df
     
     
@@ -1206,7 +1262,7 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
         return spikes_df, flat_spikes_out_dict 
 
     @classmethod
-    def _default_kdiba_spikeII_compute_laps_vars(cls, session, spikes_df, time_variable_name='t_seconds'):
+    def _default_kdiba_spikeII_compute_laps_vars(cls, session, spikes_df: pd.DataFrame, time_variable_name='t_seconds'):
         """ Attempts to compute the Laps object from the loaded spikesII spikes, which have a 'lap' column.
         time_variable_name: (str) either 't' or 't_seconds', indicates which time variable to return in 'lap_start_stop_time'
         """
@@ -1290,12 +1346,15 @@ class KDibaOldDataSessionFormatRegisteredClass(DataSessionFormatBaseRegisteredCl
                              'start_t':np.array(laps_first_spike_instances['t'].values), 'end_t':np.array(laps_last_spike_instances['t'].values),
                              'start_t_seconds':np.array(laps_first_spike_instances[time_variable_name].values), 'end_t_seconds':np.array(laps_last_spike_instances[time_variable_name].values)
                              }
-        laps_df = Laps.build_dataframe(flat_var_out_dict, time_variable_name=time_variable_name, absolute_start_timestamp=session.config.absolute_start_timestamp)
+        laps_df: pd.DataFrame = LapsAccessor.init_dataframe_from_mat_loaded_dict(flat_var_out_dict, time_variable_name=time_variable_name, absolute_start_timestamp=session.config.absolute_start_timestamp,
+                                                    global_session=session,
+                                                    )  # 1014937 rows × 11 columns
+
         session.laps = Laps(laps_df) # new DataFrame-based approach
         
         # session.laps = Laps(lap_id, laps_spike_counts, lap_start_stop_flat_idx, lap_start_stop_time)
         
-        session.laps.update_lap_dir_from_smoothed_velocity(session) # added 2024-01-24 
+        session.laps.update_lap_dir_from_net_displacement(session) # added 2024-01-24 
 
         # return lap_id, laps_spike_counts, lap_start_stop_flat_idx, lap_start_stop_time
         return session, spikes_df

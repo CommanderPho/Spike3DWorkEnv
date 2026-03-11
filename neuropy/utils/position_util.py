@@ -1,14 +1,23 @@
+from copy import deepcopy
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.manifold import Isomap
 from scipy.ndimage import gaussian_filter1d
+from rdp import rdp ## used by `simplify_position_trajectory`
 
 from .. import core
 from neuropy.utils.mathutil import contiguous_regions, threshPeriods, compute_grid_bin_bounds, map_value
 from neuropy.utils.mixins.binning_helpers import compute_spanning_bins
-
+from typing import Dict, List, Tuple, Optional, Callable, Union, Any
+from typing_extensions import TypeAlias
+from nptyping import NDArray
+import neuropy.utils.type_aliases as types
 from enum import Enum
+from attrs import define, field, Factory
+import numpy as np
+from neuropy.core.epoch import NamedTimerange, EpochsAccessor, Epoch
+from shapely.geometry import LineString, Point # for ShapelyMaze
 
 
 class RegularizationApproach(Enum):
@@ -18,7 +27,44 @@ class RegularizationApproach(Enum):
     RESTORE_X_RANGE = "restore_x_range" # restores the original range of the x values after performing the linearization.
     
 
-def linearize_position_df(pos_df: pd.DataFrame, sample_sec=3, method="isomap", sigma=2, override_position_sampling_rate_Hz=None, regularization_approach:RegularizationApproach=RegularizationApproach.RAW_VALUES):
+
+@define(slots=False)
+class ShapelyMaze:
+    nodes: List[Tuple[float, float]] = field(default=Factory(list))
+    maze_track_line: LineString = field(default=None, init=False)
+    
+    def __attrs_post_init__(self):
+        self.maze_track_line = LineString(self.nodes)
+    
+    def shapely_linearize_trajectory(self, df: pd.DataFrame):
+        """
+        Linearize trajectory points by projecting them onto a Shapely LineString.
+
+        Args:
+            df (pd.DataFrame): DataFrame with 'x' and 'y' columns.
+            track_line (LineString): Shapely LineString representing the maze path.
+
+        Returns:
+            pd.Series: Linearized positions (distance along the track_line).
+        """
+        # Create Point objects from 'x' and 'y' columns
+        # Using .apply() with a lambda function for potentially better performance than a list comprehension on large DFs
+        points = df.apply(lambda row: Point(row['x'], row['y']), axis=1)
+
+        # Project each point onto the LineString and get the distance along it
+        linear_positions = [self.maze_track_line.project(p) for p in points]
+        return pd.Series(linear_positions, index=df.index)
+    
+
+@define(slots=False)
+class ShapelyMazeCollection:
+    shapelyMazes: Dict[str, ShapelyMaze] = field(default=Factory(dict))
+    valid_epochs: Dict[str, Tuple[float, float]] = field(default=Factory(dict))    
+
+
+
+def linearize_position_df(pos_df: pd.DataFrame, sample_sec=3, method="isomap", sigma=2, override_position_sampling_rate_Hz=None, regularization_approach:RegularizationApproach=RegularizationApproach.RAW_VALUES,
+                          all_session_mazes: Optional[ShapelyMazeCollection]=None):
     """linearize trajectory. Use method='PCA' for off-angle linear track, method='ISOMAP' for any non-linear track.
     ISOMAP is more versatile but also more computationally expensive.
 
@@ -34,13 +80,17 @@ def linearize_position_df(pos_df: pd.DataFrame, sample_sec=3, method="isomap", s
     
     Modifies:
         Adds the 'lin_pos' column to the provided position dataframe.
-    """    
+    """
+    pos_df = deepcopy(pos_df).dropna(subset=['x','y'], how='any')
+    
     xy_pos = pos_df[['x','y']].to_numpy()
     
     xlinear = None
     if method.lower() == "pca":
         pca = PCA(n_components=1)
         xlinear = pca.fit_transform(xy_pos).squeeze()
+
+
     elif method.lower() == "isomap":
         imap = Isomap(n_neighbors=5, n_components=2)
         # downsample points to reduce memory load and time
@@ -58,6 +108,80 @@ def linearize_position_df(pos_df: pd.DataFrame, sample_sec=3, method="isomap", s
         if iso_pos.std(axis=0)[0] < iso_pos.std(axis=0)[1]:
             iso_pos[:, [0, 1]] = iso_pos[:, [1, 0]]
         xlinear = iso_pos[:, 0]
+        
+
+    elif method.lower() == "umap":
+        try:
+            import umap
+        except ImportError as e:
+            raise ImportError("UMAP method requires the 'umap-learn' library. Please install it via 'pip install umap-learn'.") from e
+
+        # Downsample points for fitting, as in ISOMAP
+        if override_position_sampling_rate_Hz is not None:
+            position_sampling_rate_Hz = override_position_sampling_rate_Hz
+        else:
+            assert 't' in pos_df.columns
+            position_sampling_rate_Hz = 1.0 / np.nanmean(np.diff(pos_df['t'].to_numpy()))
+        num_end_samples = int(np.round(position_sampling_rate_Hz * sample_sec))
+        pos_ds = xy_pos[::num_end_samples]
+        t_ds = pos_df['t'].to_numpy()[::num_end_samples]
+        t_all = pos_df['t'].to_numpy()
+
+        reducer = umap.UMAP(
+            n_neighbors=10,       # or tune as desired
+            n_components=2,       # retain 2D manifold for possible future use; will use first dimension for linearization
+            metric='euclidean',   # or tune if necessary
+            random_state=1337,      # for reproducibility
+            verbose=False
+        )
+        embedding_ds = reducer.fit_transform(pos_ds)
+
+        # For continuity, you may want to flip axes based on variance as with ISOMAP
+        if embedding_ds.std(axis=0)[0] < embedding_ds.std(axis=0)[1]:
+            embedding_ds[:, [0, 1]] = embedding_ds[:, [1, 0]]
+
+        # Use the first UMAP dimension as the linearized projection for now
+        xlinear_ds = embedding_ds[:, 0]
+
+        # Interpolate for all timepoints
+        from scipy.interpolate import interp1d
+        interp_func = interp1d(t_ds, xlinear_ds, kind='linear', fill_value="extrapolate", assume_sorted=True)
+        xlinear = interp_func(t_all)
+
+    elif method.lower() == "shapely":
+        ## Added 2025-11-26 - Shapely uses user-defined track geometry (shapes) to properly linearize the 2D position in a manner way more efficient than UMAP (which exceeds memory bounds)
+        assert all_session_mazes is not None, f"all_session_mazes must be provided (defining the maze/track geometry) when using method == 'shapely'."
+        ## INPUTS: pos_df, all_session_mazes (with shapelyMazes and valid_epochs)
+        piecewise_lin_pos = pd.Series(np.nan, index=pos_df.index, dtype=float)
+        t_col = pos_df['t'].to_numpy()
+
+        for track_maze_key, shapely_maze in all_session_mazes.shapelyMazes.items():
+            # Get the valid epoch time bounds for this maze
+            epoch_bounds = all_session_mazes.valid_epochs.get(track_maze_key, None)
+            if epoch_bounds is None:
+                continue
+            maze_start_t, maze_end_t = epoch_bounds
+
+            # Find rows where 't' falls within the maze's valid epoch
+            time_mask = (t_col >= maze_start_t) & (t_col <= maze_end_t)
+            if not np.any(time_mask):
+                continue
+
+            # Check if pre-computed linearized position column exists
+            source_col_name = f'shapely_linearized_position_{track_maze_key}'
+            if source_col_name in pos_df.columns:
+                # Use pre-computed values
+                piecewise_lin_pos.loc[time_mask] = pos_df.loc[time_mask, source_col_name]
+            else:
+                # Compute linearization on-the-fly using the ShapelyMaze
+                track_pos_df = pos_df.loc[time_mask, ['x', 'y']]
+                linearized_values = shapely_maze.shapely_linearize_trajectory(track_pos_df)
+                piecewise_lin_pos.loc[time_mask] = linearized_values.values
+
+        xlinear = piecewise_lin_pos.to_numpy()
+        # from pyphoplacecellanalysis.SpecificResults.PendingNotebookCode import bapun_proper_linearize_tracks
+        # pos_df_dict, maze_track_line_dict = bapun_proper_linearize_tracks(curr_active_pipeline)
+
     else:
         print('ERROR: invalid method name: {}'.format(method))
         
@@ -269,4 +393,103 @@ def compute_position_grid_size(*any_1d_series, num_bins:tuple):
         out_bin_grid_step_size[i] = xbin_info.step
 
     return out_bin_grid_step_size, out_bins, out_bins_info
+
+
+# @function_attributes(short_name=None, tags=['downsample', 'trajectory', 'path', 'subsample', 'efficiency', 'position'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2026-01-21 06:48', related_items=[])
+def simplify_position_trajectory(position_df: pd.DataFrame, epsilon: float = 0.5, algorithm: str = "rdp", algo: str = "iter") -> pd.Series:
+    """Simplify position trajectories using line simplification algorithms to reduce plotted points while preserving path features.
+    
+    Uses the Ramer-Douglas-Peucker (RDP) algorithm by default to downsample position trajectories
+    while maintaining the essential shape of the path. Returns a boolean mask that can be used to
+    filter the original dataframe to the simplified trajectory. Supports both 2D (x, y) and 3D (x, y, z) positions.
+    
+    Parameters
+    ----------
+    position_df : pd.DataFrame
+        DataFrame with ['x', 'y'] columns (required) and optionally ['z'] column for 3D positions.
+        The function automatically detects if 'z' is present and processes 3D coordinates accordingly.
+    epsilon : float, optional
+        Simplification tolerance. Higher values result in more aggressive simplification (fewer points retained).
+        Default is 0.5.
+    algorithm : str, optional
+        Algorithm choice. Currently only "rdp" is supported. Default is "rdp".
+    algo : str, optional
+        For RDP algorithm, use "iter" (iterative) to enable return_mask support. Default is "iter".
+    
+    Returns
+    -------
+    pd.Series
+        Boolean mask of the same length as position_df. True indicates the point is kept in the
+        simplified trajectory, False indicates it should be filtered out.
+        The mask preserves the original dataframe index for proper filtering with `.loc[mask]`.
+    
+    Examples
+    --------
+    >>> position_df = ...  # DataFrame with ['x', 'y'] columns
+    >>> mask = simplify_position_trajectory(position_df, epsilon=0.5)
+    >>> simplified_df = position_df.loc[mask]
+    
+    >>> position_df_3d = ...  # DataFrame with ['x', 'y', 'z'] columns
+    >>> mask = simplify_position_trajectory(position_df_3d, epsilon=0.5)
+    >>> simplified_df = position_df_3d.loc[mask]
+    """
+    # Validate input
+    if not isinstance(position_df, pd.DataFrame):
+        raise TypeError(f"position_df must be a pandas DataFrame, got {type(position_df)}")
+    
+    required_columns = ['x', 'y']
+    missing_columns = [col for col in required_columns if col not in position_df.columns]
+    if missing_columns:
+        raise ValueError(f"position_df must contain columns {required_columns}, missing: {missing_columns}")
+    
+    # Determine if 3D coordinates are present
+    has_z = 'z' in position_df.columns
+    coord_columns = ['x', 'y', 'z'] if has_z else ['x', 'y']
+    
+    # Handle edge cases
+    if len(position_df) == 0:
+        return pd.Series([], dtype=bool, index=position_df.index)
+    
+    if len(position_df) < 3:
+        # RDP requires at least 3 points. For < 3 points, return all True
+        return pd.Series([True] * len(position_df), dtype=bool, index=position_df.index)
+    
+    # Extract coordinates and handle NaN values
+    xyz_pos = position_df[coord_columns].to_numpy()
+    
+    # Check for NaN values
+    nan_mask = np.isnan(xyz_pos).any(axis=1)
+    if nan_mask.all():
+        # All points are NaN
+        return pd.Series([False] * len(position_df), dtype=bool, index=position_df.index)
+    
+    # Filter out NaN points for RDP processing
+    valid_mask = ~nan_mask
+    valid_xyz = xyz_pos[valid_mask]
+    
+    if len(valid_xyz) < 3:
+        # After filtering NaNs, we have < 3 valid points
+        result_mask = pd.Series([False] * len(position_df), dtype=bool, index=position_df.index)
+        result_mask[valid_mask] = True  # Keep the valid points
+        return result_mask
+    
+    # Apply RDP algorithm
+    if algorithm.lower() == "rdp":
+        if algo != "iter":
+            raise ValueError(f"algo must be 'iter' to enable return_mask support, got '{algo}'")
+        
+        # RDP with return_mask=True returns a boolean mask
+        # RDP automatically handles 2D (n, 2) or 3D (n, 3) coordinate arrays
+        rdp_mask = rdp(valid_xyz, epsilon=epsilon, algo=algo, return_mask=True)
+        
+        # Create full mask with same length as original dataframe
+        result_mask = pd.Series([False] * len(position_df), dtype=bool, index=position_df.index)
+        # Map the RDP mask back to the original positions (only for valid points)
+        valid_indices = position_df.index[valid_mask]
+        result_mask.loc[valid_indices] = rdp_mask
+        
+        return result_mask
+    else:
+        raise ValueError(f"Unsupported algorithm: '{algorithm}'. Currently only 'rdp' is supported.")
+
 

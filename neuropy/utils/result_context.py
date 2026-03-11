@@ -32,7 +32,9 @@ Humans need things with distinct, visual groupings. Inclusion Sets, Exceptions (
 """
 import re # used in try_extract_date_from_session_name
 import copy
-from typing import Any, List, Dict, Optional, Union, Protocol
+from typing import Any, List, Dict, Optional, Tuple, Union, Protocol
+import nptyping as ND
+from nptyping import NDArray
 from enum import Enum
 from functools import wraps # used for decorators
 from attrs import define, field, Factory
@@ -40,6 +42,7 @@ from benedict import benedict # https://github.com/fabiocaccamo/python-benedict#
 from collections import defaultdict
 from neuropy.utils.mixins.diffable import OrderedSet
 from copy import deepcopy
+import warnings
 
 import numpy as np
 import pandas as pd # used for find_unique_values
@@ -160,13 +163,220 @@ class IdentifyingContext(GetAccessibleMixin, DiffableObject, SubsettableDictRepr
             relevant_entries = [ctxt for ctxt, _ in context_iterable if ctxt.query(criteria)]
 
         elif hasattr(context_iterable, 'items'):
-            relevant_entries = {ctxt:v for ctxt,v in context_iterable.items() if ctxt.query(criteria)}
+            relevant_entries = {ctxt:v for ctxt, v in context_iterable.items() if ctxt.query(criteria)}
         else:
             raise ValueError
 
         return relevant_entries
 
-    def query(self, criteria: Union[Dict[str, Any], "IdentifyingContext"]) -> bool:
+    @classmethod
+    def find_best_matching_contexts(cls, target_context: "IdentifyingContext", context_iterable: Union[Dict["IdentifyingContext", Any], List["IdentifyingContext"]], allow_partial_matches: bool=True) -> Tuple[List["IdentifyingContext"], List[int], int]:
+        """
+        Find all context keys in the iterable that have the maximum number of matching attributes with the target context.
+
+        Parameters:
+        -----------
+        target_context : IdentifyingContext
+            The context to match against
+        context_iterable : Union[Dict["IdentifyingContext", Any], List["IdentifyingContext"]]
+            Dictionary with IdentifyingContext keys or list of IdentifyingContext objects
+            
+        Returns:
+        --------
+        Tuple[List[IdentifyingContext], int]
+            A tuple containing (list of best matching contexts, number of matches)
+            or ([], -1) if context_iterable is empty
+
+
+        Usage:
+
+            from neuropy.utils.result_context import IdentifyingContext
+
+            # Your target context
+            a_target_context = IdentifyingContext(trained_compute_epochs='laps', pfND_ndim=1, time_bin_size=0.025, known_named_decoding_epochs_type='pbe', masked_time_bin_fill_type='ignore') # removed `decoder_identifier='long_LR', `
+
+            # Get the dictionary 
+            context_dict = a_new_fully_generic_result.filter_epochs_specific_decoded_result
+
+            # Find the best match
+            best_matches, number_matching_context_attributes, max_num_matching_context_attributes = IdentifyingContext.find_best_matching_contexts(a_target_context, context_dict)
+
+            if best_matches:
+                # print(f"Found best match with {number_matching_context_attributes} matching attributes:")
+                print(f"best_matches list: {best_matches}\n")
+                
+                # Get the corresponding value
+                best_match_values = {a_best_match:context_dict[a_best_match] for a_best_match in best_matches}
+                # best_match_values
+            else:
+                print("No matches found in the dictionary.")
+
+        """
+        from neuropy.utils.mixins.dict_representable import get_dict_subset
+        from neuropy.utils.misc import is_iterable
+        
+
+        if not context_iterable:
+            return [], -1
+        
+        target_dict = target_context.to_dict()
+        best_matches: List["IdentifyingContext"] = []
+        number_matching_context_attributes: List[int] = []
+        max_num_matching_context_attributes: int = -1
+        
+        # Extract the contexts to compare based on input type
+        if isinstance(context_iterable, (list, tuple)):
+            contexts_to_compare = context_iterable
+        elif hasattr(context_iterable, 'keys'):
+            contexts_to_compare = list(context_iterable.keys())
+        else:
+            raise ValueError("context_iterable must be a list or dictionary")
+        
+        # First pass: find the maximum number of matches
+        for context_key in contexts_to_compare:
+            curr_ctxt_key_dict = context_key.to_dict() ## note this is a benedict-dict it seems instead of a standard python dict
+            
+            # Count matching attributes
+            # matching_only_key_dict = get_dict_subset(key_dict, included_keys=list(target_dict.keys()), require_all_keys=False)
+            # is_valid_match = np.all([str(target_dict[k]) == str(v) for k, v in matching_only_key_dict.items()])
+
+            curr_ctxt_matching_attributes_count: int = 0
+            is_valid_match = True
+            for attr_name, attr_value in target_dict.items():
+                if (attr_name in curr_ctxt_key_dict):
+                    if (curr_ctxt_key_dict[attr_name] == attr_value):
+                        curr_ctxt_matching_attributes_count += 1  # note the match and continue comparing
+                    elif (attr_value and is_iterable(attr_value) and (curr_ctxt_key_dict[attr_name] in attr_value)):
+                        curr_ctxt_matching_attributes_count += 1  # note the match is in the allowed comparison values and continue comparing
+                    else:
+                        is_valid_match = False  # not a valid match
+                        break
+            ## END for attr_na...
+                
+            # Skip this context if it has conflicting attribute values
+            if not is_valid_match:
+                continue
+            else:
+                ## match still valid, see if the current is better than the previous
+                # Update best match if current is better
+                should_skip_append: bool = False
+                if (curr_ctxt_matching_attributes_count > max_num_matching_context_attributes):
+                    max_num_matching_context_attributes = curr_ctxt_matching_attributes_count
+                    if (not allow_partial_matches):
+                        best_matches = [context_key] ## create a new list with the new context (as this number of matches is the current max
+                    else:
+                        best_matches.append(context_key) ## keep accumulating, never reset
+                        
+                elif (curr_ctxt_matching_attributes_count == max_num_matching_context_attributes): # and (match_count > 0)
+                    best_matches.append(context_key) ## add this context to the current best_matches accumulator list as it has the same number of property matches as the best
+                    
+                elif allow_partial_matches and (curr_ctxt_matching_attributes_count < max_num_matching_context_attributes): #  and (match_count > 0)
+                    best_matches.append(context_key) ## keep accumulating, never reset
+                else:
+                    ## it's a match, but worse than previously found matches
+                    should_skip_append = True
+                    pass
+                if not should_skip_append:
+                    number_matching_context_attributes.append(curr_ctxt_matching_attributes_count)
+        ## END for contex...        
+        return best_matches, number_matching_context_attributes, max_num_matching_context_attributes
+
+
+    @classmethod
+    def find_best_matching_context(cls, target_context: "IdentifyingContext", context_iterable: Union[Dict["IdentifyingContext", Any], List["IdentifyingContext"]]) -> Optional[Tuple["IdentifyingContext", int]]:
+        """
+        Find the context key in the dictionary that has the maximum number of matching attributes with the target context.
+        ## ensure all values included both in the tentative match and the specified target_context are equal or included.
+        ### keys in the `target_context` may be missing from the tenative match (underconstrained/more-general) but if they are present, they cannot be incorrect.
+
+        Parameters:
+        -----------
+        target_context : IdentifyingContext
+            The context to match against
+        context_iterable : Union[Dict["IdentifyingContext", Any], List["IdentifyingContext"]]
+            Dictionary with IdentifyingContext keys or list of IdentifyingContext objects
+            
+        Returns:
+        --------
+        Tuple[IdentifyingContext, int] or None
+            The best matching context and the number of matches, or None if context_iterable is empty
+
+
+        Usage:
+
+            from neuropy.utils.result_context import IdentifyingContext
+
+            # Your target context
+            a_target_context = IdentifyingContext(trained_compute_epochs='laps', pfND_ndim=1, decoder_identifier='long_LR', time_bin_size=0.025, known_named_decoding_epochs_type='pbe', masked_time_bin_fill_type='ignore')
+
+            # Get the dictionary 
+            context_dict = a_new_fully_generic_result.filter_epochs_specific_decoded_result
+
+            # Find the best match
+            best_match, max_num_matching_context_attributes = IdentifyingContext.find_best_matching_context(a_target_context, context_dict)
+
+            if best_match:
+                print(f"Found best match with {max_num_matching_context_attributes} matching attributes:")
+                print(best_match)
+                
+                # Get the corresponding value
+                best_match_value = context_dict[best_match]
+                best_match_value
+            else:
+                print("No matches found in the dictionary.")
+
+
+        """
+        if not context_iterable:
+            return None
+        
+        target_dict = target_context.to_dict()
+        best_match = None
+        max_num_matching_context_attributes: int = -1
+        
+        # Extract the contexts to compare based on input type
+        if isinstance(context_iterable, (list, tuple)):
+            contexts_to_compare = context_iterable
+        elif hasattr(context_iterable, 'keys'):
+            contexts_to_compare = context_iterable.keys()
+        else:
+            raise ValueError("context_iterable must be a list or dictionary")
+        
+        # Find the best matching context _____________________________________________________________________________________ #
+        ## ensure all values included both in the tentative match and the specified target_context are equal or included.
+        ### keys in the `target_context` may be missing from the tenative match (underconstrained/more-general) but if they are present, they cannot be incorrect.
+        for context_key in contexts_to_compare:
+            key_dict = context_key.to_dict()
+            
+            # Count matching attributes
+            is_valid_match = True
+            curr_ctxt_matching_attributes_count: int = 0
+            for attr_name, attr_value in target_dict.items():
+                if (attr_name in key_dict):
+                    if (key_dict[attr_name] == attr_value):
+                        curr_ctxt_matching_attributes_count += 1 ## note the match and continue comparing
+                    else:
+                        is_valid_match = False # not a valid match
+                        break 
+            ## END for attr_na....
+            
+            # Skip this context if it has conflicting attribute values
+            if not is_valid_match:
+                continue             
+            else:
+                ## match still valid, see if the current is better than the previous
+                # Update best match if current is better
+                if (curr_ctxt_matching_attributes_count > max_num_matching_context_attributes):
+                    max_num_matching_context_attributes = curr_ctxt_matching_attributes_count
+                    best_match = context_key
+                else:
+                    pass ## it's a match, but worse than previously found matches
+
+        return (best_match, max_num_matching_context_attributes) if best_match else (None, -1)
+
+
+
+    def query(self, criteria: Union[Dict[str, Any], "IdentifyingContext"], is_case_sensitive: bool=False) -> bool:
         """
         Checks if the IdentifyingContext instance matches the given criteria.
 
@@ -175,6 +385,9 @@ class IdentifyingContext(GetAccessibleMixin, DiffableObject, SubsettableDictRepr
         criteria : Dict[str, Any]
             A dictionary where keys are attribute names and values are attribute values that an
             IdentifyingContext instance should have to match the criteria.
+        is_case_sensitive : bool, default=False
+            If False, string comparisons are case-insensitive. If True, all comparisons are
+            case-sensitive. Non-string values are always compared normally.
 
         Returns
         -------
@@ -182,9 +395,22 @@ class IdentifyingContext(GetAccessibleMixin, DiffableObject, SubsettableDictRepr
             True if the IdentifyingContext instance matches the criteria, False otherwise.
         """
         for key, value in criteria.items():
-            if not hasattr(self, key) or getattr(self, key) != value:
+            if not hasattr(self, key):
                 return False
+            
+            attr_value = getattr(self, key)
+            
+            # Handle case-insensitive string comparison
+            if not is_case_sensitive and isinstance(attr_value, str) and isinstance(value, str):
+                if attr_value.lower() != value.lower():
+                    return False
+            else:
+                if attr_value != value:
+                    return False
         return True
+
+
+
 
     @classmethod
     def find_unique_values(cls, context_iterable: List["IdentifyingContext"]) -> dict:
@@ -231,7 +457,37 @@ class IdentifyingContext(GetAccessibleMixin, DiffableObject, SubsettableDictRepr
         non_leaf_unique_values = {k:v[0] for k, v in unique_values_dict.items() if len(v) == 1}
         common_context = IdentifyingContext(**non_leaf_unique_values)
         return common_context
+
+
+    @classmethod
+    def get_sorted_by_context_lengths(cls, context_iterable: Union[Dict["IdentifyingContext", Any], List["IdentifyingContext"]]) -> Tuple[Union[Dict["IdentifyingContext", Any], List["IdentifyingContext"]], NDArray]:
+        """ sorts the context_iterable in descending order by their context length
+        
+        Usage:
+            sorted_any_matching_contexts_list, context_lengths = IdentifyingContext.get_sorted_by_context_lengths(any_matching_contexts_list)
+        
+        """
+        if isinstance(context_iterable, dict):
+            any_matching_contexts_list = list(context_iterable.keys())
+        else:
+            ## iterable (list-like)
+            any_matching_contexts_list = context_iterable
+        context_lenghts = np.array([len(v.to_dict()) for v in any_matching_contexts_list])
+        sorted_context_lengths_indicies = np.argsort(context_lenghts)
+        sorted_context_lengths = context_lenghts[sorted_context_lengths_indicies]
+        length_sorted_contexts: List[IdentifyingContext] = [any_matching_contexts_list[i] for i in sorted_context_lengths]
+        if isinstance(context_iterable, dict):
+            return {context_iterable:context_iterable[ctx] for ctx in length_sorted_contexts}, length_sorted_contexts ## return sorted dict
+    
+        else:
+            ## iterable (list-like)
+            return length_sorted_contexts, length_sorted_contexts
             
+
+
+
+
+
     @classmethod
     def converting_to_relative_contexts(cls, common_context: "IdentifyingContext", context_iterable: Union[Dict["IdentifyingContext", Any], List["IdentifyingContext"]]):
         """ returns the iterable contexts relative to the provided common_context
@@ -272,6 +528,27 @@ class IdentifyingContext(GetAccessibleMixin, DiffableObject, SubsettableDictRepr
     @staticmethod
     def _get_session_context_keys() -> List[str]:
         return ['format_name','animal','exper_name', 'session_name']
+
+
+    @classmethod
+    def _get_session_global_uid(cls, session_context: "IdentifyingContext") -> str:
+        """ gets the globally unique (to this session) session identifier that can be used as 'session_uid' and to form 'neuron_uid'
+        
+        Suitable for use like `neuron_indexed_df['neuron_uid'] = session_uid + "|" + neuron_indexed_df['aclu'].astype(str)`
+        """
+        session_uid: str = session_context.get_description(separator="|", include_property_names=False)
+        return session_uid
+    
+
+    def get_description_as_session_global_uid(self) -> str:
+        """ gets the globally unique (to this session) session identifier that can be used as 'session_uid' and to form 'neuron_uid'        
+        Suitable for use like `neuron_indexed_df['neuron_uid'] = session_uid + "|" + neuron_indexed_df['aclu'].astype(str)`
+        
+        session_uid: str = a_ctxt.get_description_as_session_global_uid()
+        session_uid
+        """
+        return self.get_description(separator="|", include_property_names=False)
+
 
     @classmethod
     def resolve_key(cls, duplicate_ctxt: "IdentifyingContext", name:str, value, collision_prefix:str, strategy:CollisionOutcome=CollisionOutcome.APPEND_USING_KEY_PREFIX):
@@ -449,12 +726,25 @@ class IdentifyingContext(GetAccessibleMixin, DiffableObject, SubsettableDictRepr
 
     def __hash__(self):
         """ custom hash function that allows use in dictionary just based off of the values and not the object instance. """
-        # dict_rep = self.to_dict()
         dict_rep = {k: str(v).casefold() if isinstance(v, str) else v for k, v in self.to_dict().items()} # case insensitive comparison
-        # str(k).casefold()
         sorted_dict_rep = dict(sorted(dict_rep.items())) # sort the dict rep's keys so the the comparisons are ultimately independent of order, meaning IdentifyingContext(k1='a', k2='b') == IdentifyingContext(k2='b', k1='a')
         member_names_tuple = list(sorted_dict_rep.keys())
-        values_tuple = list(sorted_dict_rep.values())
+        # values_tuple = list(sorted_dict_rep.values())
+        values_tuple = []
+        # Handle unhashable types in values
+        for value in sorted_dict_rep.values():
+            if isinstance(value, list):
+                # Convert lists to tuples
+                values_tuple.append(tuple(value))
+            elif isinstance(value, dict):
+                # Convert dicts to frozensets of items
+                values_tuple.append(frozenset(value.items()))
+            elif isinstance(value, set):
+                # Convert sets to frozensets
+                values_tuple.append(frozenset(value))
+            else:
+                values_tuple.append(value)
+
         combined_tuple = tuple(member_names_tuple + values_tuple)
         return hash(combined_tuple)
     
@@ -465,15 +755,16 @@ class IdentifyingContext(GetAccessibleMixin, DiffableObject, SubsettableDictRepr
         assert (IdentifyingContext(format_name='KDIBA',animal='gor01',exper_name='one',session_name='2006-6-07_11-26-53') == IdentifyingContext(format_name='kdiba',animal='gor01',exper_name='one',session_name='2006-6-07_11-26-53'))
         
         """
-        if isinstance(other, (IdentifyingContext, )):
+        if hasattr(other, 'to_dict'):
             # Convert both dictionaries to lowercase for case-insensitive comparison
             self_dict = {k: str(v).casefold() if isinstance(v, str) else v for k, v in self.to_dict().items()}
             other_dict = {k: str(v).casefold() if isinstance(v, str) else v for k, v in other.to_dict().items()}
             return dict(sorted(self_dict.items())) == dict(sorted(other_dict.items()))
             # return self.to_dict() == other.to_dict() # Python's dicts use element-wise comparison by default, so this is what we want.
-            # return dict(sorted(self.to_dict().items())) == dict(sorted(other.to_dict().items())) 
+            # return dict(sorted(self.to_dict().items())) == dict(sorted(other.to_dict().items()))         
         else:
-            raise NotImplementedError(f"type(other): {type(other)} not handled.")
+            warnings.warn(f"type(other): {type(other)} not handled in equality comparison", UserWarning)
+            return False
 
     
     @classmethod
@@ -1313,3 +1604,38 @@ class DisplaySpecifyingIdentifyingContext(IdentifyingContext):
     #         assert subset_excludelist is None, f"subset_excludelist MUST be None when a subset_includelist is provided, but instead it's {subset_excludelist}!"
     #         return [a_key for a_key in benedict(self.__dict__).subset(subset_includelist).keys() if a_key not in (subset_excludelist or [])]
         
+
+
+
+from neuropy.utils.result_context import IdentifyingContext
+
+# Store the original method
+original_str = IdentifyingContext.__str__
+
+# Create a configuration function
+def set_context_print_options(include_property_names=True, key_value_separator=':', separator='|', replace_separator_in_property_names='-'):
+    """Set global printing options for all IdentifyingContext instances
+    
+    from neuropy.utils.result_context import set_context_print_options
+    # Usage example:
+    reset_printer = set_context_print_options(include_property_names=True)
+
+    # Later to restore default behavior:
+    # reset_printer()
+    """
+    def new_str(self):
+        return self.get_description(
+            include_property_names=include_property_names, key_value_separator=key_value_separator, separator=separator, replace_separator_in_property_names=replace_separator_in_property_names
+        )
+    
+    # Replace the __str__ method
+    IdentifyingContext.__str__ = new_str
+    
+    # Return a function to restore original behavior if needed
+    def reset():
+        IdentifyingContext.__str__ = original_str
+        
+    return reset
+
+
+

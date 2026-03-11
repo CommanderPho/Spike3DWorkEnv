@@ -11,7 +11,7 @@ import tables as tb
 from pathlib import Path
 from neuropy import core
 from neuropy.core import neurons
-from neuropy.core.epoch import Epoch, NamedTimerange
+from neuropy.core.epoch import Epoch, NamedTimerange, ensure_dataframe, ensure_Epoch
 from neuropy.core.flattened_spiketrains import FlattenedSpiketrains
 from neuropy.core.laps import Laps
 from neuropy.core.position import Position, PositionAccessor, adding_lap_info_to_position_df
@@ -26,8 +26,7 @@ from neuropy.utils.mixins.time_slicing import StartStopTimesMixin, TimeSlicableO
 from neuropy.utils.mixins.unit_slicing import NeuronUnitSlicableObjectProtocol
 from neuropy.utils.mixins.panel import DataSessionPanelMixin
 
-from neuropy.utils.efficient_interval_search import determine_event_interval_identity # numba acceleration
-
+from neuropy.utils.efficient_interval_search import determine_event_interval_identity, OverlappingIntervalsFallbackBehavior # numba acceleration
 
 # Klepto caching/memoization
 # from klepto.archives import sqltable_archive as sql_archive
@@ -80,6 +79,7 @@ class DataSession(HDF_SerializationMixin, DataSessionPanelMixin, NeuronUnitSlica
         for an_additional_arg, arg_value in kwargs.items():
             setattr(self, an_additional_arg, arg_value) # allows specifying additional information as optional arguments
     
+
     def __repr__(self) -> str:
         if self.recinfo is None:
             return f"{self.__class__.__name__}(config: {self.config}): Not yet configured."
@@ -88,6 +88,8 @@ class DataSession(HDF_SerializationMixin, DataSessionPanelMixin, NeuronUnitSlica
                 return f"{self.__class__.__name__}(configured from manual recinfo: {self.recinfo})"
             else:
                 return f"{self.__class__.__name__}({self.recinfo.source_file.name})"
+            
+    
     #######################################################
     ## Passthru Accessor Properties:
     @property
@@ -317,9 +319,10 @@ class DataSession(HDF_SerializationMixin, DataSessionPanelMixin, NeuronUnitSlica
         # returns Position objects for active_epoch_pos and linear_pos
         active_epoch_times = session.epochs[epochLabelName] # array([11070, 13970], dtype=int64)
         acitve_epoch_timeslice_indicies = session.position.time_slice_indicies(active_epoch_times[0], active_epoch_times[1])
-        active_epoch_pos = session.position.time_slice(active_epoch_times[0], active_epoch_times[1])
+        active_epoch_pos: Position = session.position.time_slice(active_epoch_times[0], active_epoch_times[1])
         # linear_pos = position_util.linearize_position(active_epoch_pos, method=method)
-        linear_pos = active_epoch_pos.compute_linearized_position(method=method)
+        active_epoch_pos = active_epoch_pos.compute_linearized_position(method=method)
+        linear_pos = active_epoch_pos.linear_pos_obj
         return acitve_epoch_timeslice_indicies, active_epoch_pos, linear_pos
     
 
@@ -352,7 +355,8 @@ class DataSession(HDF_SerializationMixin, DataSessionPanelMixin, NeuronUnitSlica
 
     @staticmethod
     def compute_pbe_epochs(session, active_parameters=None, save_on_compute=False):
-        """ 
+        """ Primary function to compute PBEs
+        
             old_default_parameters = dict(sigma=0.02, thresh=(0, 3), min_dur=0.1, merge_dur=0.01, max_dur=1.0) # Default
             old_kamran_parameters = dict(sigma=0.02, thresh=(0, 1.5), min_dur=0.06, merge_dur=0.06, max_dur=2.3) # Kamran's Parameters
             new_papers_parameters = dict(sigma=0.030, thresh=(0, 1.5), min_dur=0.030, merge_dur=0.100, max_dur=0.300) # NewPaper's Parameters
@@ -361,7 +365,7 @@ class DataSession(HDF_SerializationMixin, DataSessionPanelMixin, NeuronUnitSlica
             new_pbe_epochs = sess.compute_pbe_epochs(sess, active_parameters=kamrans_new_parameters)
 
         """
-        from neuropy.analyses import detect_pbe_epochs
+        from neuropy.analyses.spkepochs import detect_pbe_epochs
         print('computing PBE epochs for session...\n')
         if active_parameters is None:
             raise NotImplementedError
@@ -383,6 +387,260 @@ class DataSession(HDF_SerializationMixin, DataSessionPanelMixin, NeuronUnitSlica
         return new_pbe_epochs
     # sess.pbe = compute_pbe_epochs(sess)
     
+
+    # @function_attributes(short_name=None, tags=['non_PBE', 'epoch'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2025-02-18 19:07', related_items=[])
+    @classmethod
+    def compute_non_PBE_epochs(cls, session, active_parameters=None, save_on_compute=False, **additional_df_metdata) -> pd.DataFrame:
+        """ Builds a dictionary of train/test-split epochs for ['long', 'short', 'global'] periods
+        
+        from pyphoplacecellanalysis.SpecificResults.PendingNotebookCode import _adding_global_non_PBE_epochs
+        
+        a_new_training_df, a_new_test_df, a_new_training_df_dict, a_new_test_df_dict = Compute_NonPBE_Epochs._compute_non_PBE_epochs_from_sess(sess=long_session)
+        a_new_training_df
+        a_new_test_df
+
+            
+        sess.pbe
+        sess.epochs
+        curr_active_pipeline.find_LongShortDelta_times()
+        
+        Usage:
+        
+            t_start, t_delta, t_end = curr_active_pipeline.find_LongShortDelta_times()
+            , t_start: float, t_delta: float, t_end: float
+        
+        """
+        print('computing non_PBE epochs for session...\n')
+        if active_parameters is None:
+            active_parameters = {} # empty dict
+        # Filter parameters:
+        extracted_filter_parameters = dict(require_intersecting_epoch=active_parameters.pop('require_intersecting_epoch', None),
+                                            min_epoch_included_duration=active_parameters.pop('min_epoch_included_duration', None), max_epoch_included_duration=active_parameters.pop('max_epoch_included_duration', None),
+                                            maximum_speed_thresh=active_parameters.pop('maximum_speed_thresh', None),
+                                            min_inclusion_fr_active_thresh=active_parameters.pop('min_inclusion_fr_active_thresh', None), min_num_unique_aclu_inclusions=active_parameters.pop('min_num_unique_aclu_inclusions', None))
+
+
+        ## build the epochs object:    
+        PBE_df: pd.DataFrame = ensure_dataframe(deepcopy(session.pbe))
+        ## Build up a new epoch -- this works successfully for filter epochs as well, although 'maze' label is incorrect
+        epochs_df: pd.DataFrame = deepcopy(session.epochs).epochs.adding_global_epoch_row()
+        global_epoch_only_df: pd.DataFrame = epochs_df.epochs.label_slice('maze')
+
+        # t_start, t_stop = epochs_df.epochs.t_start, epochs_df.epochs.t_stop
+        global_epoch_only_non_PBE_epoch_df: pd.DataFrame = global_epoch_only_df.epochs.subtracting(PBE_df)
+        global_epoch_only_non_PBE_epoch_df = global_epoch_only_non_PBE_epoch_df.epochs.modify_each_epoch_by(additive_factor=-0.008, final_output_minimum_epoch_duration=0.040)
+
+        # 'global'
+        # f'global_NonPBE_TRAIN'
+
+        df_metadata = {}
+        # if track_identity is not None:
+        #     df_metadata['track_identity'] = track_identity
+        # if interval_datasource_name is not None:
+        #     df_metadata['interval_datasource_name'] = interval_datasource_name
+            
+        df_metadata.update(**additional_df_metdata)        
+        # for a_df_metadata_key, a_v in additional_df_metdata.items():
+            
+        ## Add the metadata:
+        if len(df_metadata) > 0:
+            global_epoch_only_non_PBE_epoch_df = global_epoch_only_non_PBE_epoch_df.epochs.adding_or_updating_metadata(**df_metadata)
+        
+        ## Add the maze_id column to the epochs:
+        
+        # a_new_global_training_df = a_new_global_training_df.epochs.adding_maze_id_if_needed(t_start=t_start, t_delta=t_delta, t_end=t_end)
+        # a_new_global_test_df = a_new_global_test_df.epochs.adding_maze_id_if_needed(t_start=t_start, t_delta=t_delta, t_end=t_end)
+
+        # maze_id_to_maze_name_map = {-1:'none', 0:'long', 1:'short'}
+        # a_new_global_training_df['maze_name'] = a_new_global_training_df['maze_id'].map(maze_id_to_maze_name_map)
+        # a_new_global_test_df['maze_name'] = a_new_global_test_df['maze_id'].map(maze_id_to_maze_name_map)
+
+
+        ## finally, filter on it if needed:
+        new_non_pbe_epochs = Epoch.filter_epochs(ensure_Epoch(global_epoch_only_non_PBE_epoch_df), pos_df=session.position.to_dataframe(), spikes_df=session.spikes_df.copy(), **extracted_filter_parameters, debug_print=False) # Filter based on the criteria if provided
+
+
+
+        if save_on_compute:
+            new_non_pbe_epochs.filename = session.filePrefix.with_suffix('.non_pbe.npy')
+            with ProgressMessagePrinter(new_non_pbe_epochs.filename, action='Saving', contents_description='non_pbe results'):
+                new_non_pbe_epochs.save()
+                
+        return new_non_pbe_epochs
+    
+
+    @classmethod
+    def compute_non_PBE_EndcapsOnly_epochs(cls, session, active_parameters=None, save_on_compute=False, **additional_df_metdata) -> pd.DataFrame:
+        """ Compute the 'non_pbe_endcap' epochs, which are the non_pbe epochs with the laps also subtracted out        
+        """
+        print('computing non_PBE_EndcapsOnly epochs for session...\n')
+        if active_parameters is None:
+            active_parameters = {} # empty dict
+        # Filter parameters:
+        extracted_filter_parameters = dict(require_intersecting_epoch=active_parameters.pop('require_intersecting_epoch', None),
+                                            min_epoch_included_duration=active_parameters.pop('min_epoch_included_duration', None), max_epoch_included_duration=active_parameters.pop('max_epoch_included_duration', None),
+                                            maximum_speed_thresh=active_parameters.pop('maximum_speed_thresh', None),
+                                            min_inclusion_fr_active_thresh=active_parameters.pop('min_inclusion_fr_active_thresh', None), min_num_unique_aclu_inclusions=active_parameters.pop('min_num_unique_aclu_inclusions', None))
+        
+        epoch_overlap_prevention_kwargs = dict(additive_factor=active_parameters.pop('additive_factor', -0.008), final_output_minimum_epoch_duration=active_parameters.pop('final_output_minimum_epoch_duration', 0.040)) # passed to `*df.epochs.modify_each_epoch_by(...)`
+        
+
+        ## build the epochs object:    
+        PBE_df: pd.DataFrame = ensure_dataframe(deepcopy(session.pbe))
+        ## Build up a new epoch -- this works successfully for filter epochs as well, although 'maze' label is incorrect
+        epochs_df: pd.DataFrame = deepcopy(session.epochs).epochs.adding_global_epoch_row()
+        global_epoch_only_df: pd.DataFrame = epochs_df.epochs.label_slice('maze')
+
+        # t_start, t_stop = epochs_df.epochs.t_start, epochs_df.epochs.t_stop
+        global_epoch_only_non_PBE_epoch_df: pd.DataFrame = global_epoch_only_df.epochs.subtracting(PBE_df)
+        global_epoch_only_non_PBE_epoch_df = global_epoch_only_non_PBE_epoch_df.epochs.modify_each_epoch_by(**epoch_overlap_prevention_kwargs)
+
+        ## Compute the 'non_pbe_endcap' epochs, which are the non_pbe epochs with the laps also subtracted out
+        # global_epoch_only_non_PBE_epoch_df = ensure_dataframe(deepcopy(curr_active_pipeline.filtered_sessions[global_epoch_name].non_pbe))
+        laps_df = ensure_dataframe(deepcopy(session.laps))
+
+        non_pbe_endcaps_df = deepcopy(global_epoch_only_non_PBE_epoch_df).epochs.subtracting(laps_df)
+        non_pbe_endcaps_df = non_pbe_endcaps_df.epochs.modify_each_epoch_by(**epoch_overlap_prevention_kwargs) # minimum length to consider is 50ms, contract each epoch inward by -8ms (4ms on each side)
+        non_pbe_endcaps_df = non_pbe_endcaps_df.epochs.adding_or_updating_metadata(track_identity='global', interval_datasource_name=f'global_EndcapsNonPBE') # train_test_period='train', training_data_portion=training_data_portion, 
+
+        # OUTPUTS: non_pbe_endcaps_df
+
+        # 'global'
+        # f'global_NonPBE_TRAIN'
+
+        df_metadata = {}
+        # if track_identity is not None:
+        #     df_metadata['track_identity'] = track_identity
+        # if interval_datasource_name is not None:
+        #     df_metadata['interval_datasource_name'] = interval_datasource_name
+            
+        df_metadata.update(**additional_df_metdata)        
+        # for a_df_metadata_key, a_v in additional_df_metdata.items():
+            
+        ## Add the metadata:
+        if len(df_metadata) > 0:
+            non_pbe_endcaps_df = non_pbe_endcaps_df.epochs.adding_or_updating_metadata(**df_metadata)
+        
+        ## Add the maze_id column to the epochs:
+        
+        # a_new_global_training_df = a_new_global_training_df.epochs.adding_maze_id_if_needed(t_start=t_start, t_delta=t_delta, t_end=t_end)
+        # a_new_global_test_df = a_new_global_test_df.epochs.adding_maze_id_if_needed(t_start=t_start, t_delta=t_delta, t_end=t_end)
+
+        # maze_id_to_maze_name_map = {-1:'none', 0:'long', 1:'short'}
+        # a_new_global_training_df['maze_name'] = a_new_global_training_df['maze_id'].map(maze_id_to_maze_name_map)
+        # a_new_global_test_df['maze_name'] = a_new_global_test_df['maze_id'].map(maze_id_to_maze_name_map)
+
+
+        ## finally, filter on it if needed:
+        new_non_pbe_endcaps_epochs = Epoch.filter_epochs(ensure_Epoch(non_pbe_endcaps_df), pos_df=session.position.to_dataframe(), spikes_df=session.spikes_df.copy(), **extracted_filter_parameters, debug_print=False) # Filter based on the criteria if provided
+
+        if save_on_compute:
+            new_non_pbe_endcaps_epochs.filename = session.filePrefix.with_suffix('.non_pbe_endcaps.npy')
+            with ProgressMessagePrinter(new_non_pbe_endcaps_epochs.filename, action='Saving', contents_description='non_pbe_endcaps results'):
+                new_non_pbe_endcaps_epochs.save()
+                
+        return new_non_pbe_endcaps_epochs
+    
+
+    @classmethod
+    def perform_compute_non_running_epochs(cls, session, max_run_speed: float = 10.0, minimum_epoch_duration: float = 0.20, merging_adjacent_max_separation_sec: float = 0.01, speed_col_name: str = 'speed_xy', active_parameters=None, save_on_compute=False, **additional_df_metdata) -> Epoch:
+        """computes the low-speed non-running epochs and adds them to the session if they don't already exist there
+
+        Args:
+            session: The DataSession object
+            max_run_speed: Maximum speed threshold (cm/s) to consider as "non-running". Default: 10.0
+            minimum_epoch_duration: Minimum duration (seconds) for an epoch to be included. Default: 0.5
+            merging_adjacent_max_separation_sec: Maximum separation (seconds) between adjacent epochs to merge them. Default: 0.01
+            speed_col_name: Name of the speed column in the position dataframe. Default: 'speed_xy'
+            active_parameters: Optional dict with filter parameters:
+                - require_intersecting_epoch: Epoch object that epochs must intersect with
+                - min_epoch_included_duration: Minimum epoch duration for filtering
+                - max_epoch_included_duration: Maximum epoch duration for filtering
+                - maximum_speed_thresh: Maximum speed threshold for filtering
+                - min_inclusion_fr_active_thresh: Minimum firing rate threshold
+                - min_num_unique_aclu_inclusions: Minimum number of unique active cells
+            save_on_compute: If True, save the epochs to a file. Default: False
+            **additional_df_metdata: Additional metadata to add to the epochs dataframe
+
+        Usage:
+            from neuropy.core.session.dataSession import DataSession
+
+            # Simple: just compute with default 10.0 cm/s threshold
+            non_running_epochs = DataSession.perform_compute_non_running_epochs(a_sess)
+
+            ## With instance:
+            non_running_epochs = a_sess.compute_non_running_epochs(max_run_speed=10.0)
+            non_running_epochs
+
+        """
+        extant_non_running_epochs_df = getattr(session, 'non_running_epochs', None)
+        if (extant_non_running_epochs_df is not None):
+            print(f'already have extant_non_running_epochs_df: {extant_non_running_epochs_df}.\n\tskipping compute and loading previous...')
+            non_running_epochs_df: pd.DataFrame = ensure_dataframe(session.non_running_epochs)
+            epochs_obj = ensure_Epoch(deepcopy(non_running_epochs_df))
+        else:
+            print(f'recomputing non_running_epochs_df...')
+            non_running_epochs_df: pd.DataFrame = session.position.compute_speed_info().position.detect_general_non_running_epochs(
+                max_run_speed=max_run_speed,
+                minimum_epoch_duration=minimum_epoch_duration,
+                merging_adjacent_max_separation_sec=merging_adjacent_max_separation_sec,
+                speed_col_name=speed_col_name
+            )
+            
+            # Extract filter parameters if provided
+            if active_parameters is None:
+                active_parameters = {}
+            extracted_filter_parameters = dict(
+                require_intersecting_epoch=active_parameters.pop('require_intersecting_epoch', None),
+                min_epoch_included_duration=active_parameters.pop('min_epoch_included_duration', None),
+                max_epoch_included_duration=active_parameters.pop('max_epoch_included_duration', None),
+                maximum_speed_thresh=active_parameters.pop('maximum_speed_thresh', None),
+                min_inclusion_fr_active_thresh=active_parameters.pop('min_inclusion_fr_active_thresh', None),
+                min_num_unique_aclu_inclusions=active_parameters.pop('min_num_unique_aclu_inclusions', None)
+            )
+            
+            # Build metadata dict
+            df_metadata = {'max_run_speed': max_run_speed, 'minimum_epoch_duration': minimum_epoch_duration}
+            df_metadata.update(**additional_df_metdata)
+            
+            # Create epochs object
+            epochs_obj = ensure_Epoch(deepcopy(non_running_epochs_df))
+            
+            # Add metadata to dataframe if provided
+            if len(df_metadata) > 0:
+                epochs_df = epochs_obj.to_dataframe()
+                epochs_df = epochs_df.epochs.adding_or_updating_metadata(**df_metadata)
+                epochs_obj = ensure_Epoch(epochs_df)
+            
+            # Apply filtering if filter parameters are provided
+            if any(v is not None for v in extracted_filter_parameters.values()):
+                epochs_obj = Epoch.filter_epochs(
+                    curr_epochs=epochs_obj,
+                    pos_df=session.position.to_dataframe(),
+                    spikes_df=session.spikes_df.copy(),
+                    **extracted_filter_parameters,
+                    debug_print=False
+                )
+            
+            print('assigning to `session.non_running_epochs`...')
+            setattr(session, 'non_running_epochs', deepcopy(epochs_obj))
+            # session.non_running_epochs = deepcopy(epochs_obj)
+            print(f'\tassigned.')
+
+        if save_on_compute:
+            epochs_obj.filename = session.filePrefix.with_suffix('.non_running.npy')
+            with ProgressMessagePrinter(epochs_obj.filename, action='Saving', contents_description='non_running epochs'):
+                epochs_obj.save()
+
+        print(f'done.')
+        return epochs_obj
+
+
+    def compute_non_running_epochs(self, **kwargs):
+        """ ensures self.non_running_epochs exists """
+        return self.perform_compute_non_running_epochs(session=self, **kwargs)
+
+
     @staticmethod
     def compute_linear_position(session, debug_print=False):
         """ compute linear positions:
@@ -398,7 +656,7 @@ class DataSession(HDF_SerializationMixin, DataSessionPanelMixin, NeuronUnitSlica
                 curr_active_epoch_timeslice_indicies, active_positions_curr_maze, linearized_positions_curr_maze = DataSession._perform_compute_session_linearized_position(session, epochLabelName=anEpochLabelName, method='isomap')
                 if debug_print:
                     print('\t curr_active_epoch_timeslice_indicies: {}\n \t np.shape(curr_active_epoch_timeslice_indicies): {}'.format(curr_active_epoch_timeslice_indicies, np.shape(curr_active_epoch_timeslice_indicies)))
-                session.position._data.loc[curr_active_epoch_timeslice_indicies, 'lin_pos'] = linearized_positions_curr_maze.linear_pos # TODO: should just be able to replace with `active_positions_curr_maze`
+                session.position._df.loc[curr_active_epoch_timeslice_indicies, 'lin_pos'] = linearized_positions_curr_maze.linear_pos # TODO: should just be able to replace with `active_positions_curr_maze`
                 
             except ValueError as e:
                 # A ValueError occurs when the positions are empty during a given epoch (which occurs during any non-maze Epoch, such as 'pre' or 'post'.
@@ -444,7 +702,7 @@ class DataSession(HDF_SerializationMixin, DataSessionPanelMixin, NeuronUnitSlica
         Returns:
             _type_: _description_
         """
-        from pyphoplacecellanalysis.General.Pipeline.Stages.ComputationFunctions.DefaultComputationFunctions import KnownFilterEpochs
+        from pyphoplacecellanalysis.General.Pipeline.Stages.ComputationFunctions.EpochComputationFunctions import KnownFilterEpochs
 
         print('computing estimated replay epochs for session...\n')
         filter_epochs = a_session.pbe # Epoch object
@@ -528,6 +786,31 @@ class DataSession(HDF_SerializationMixin, DataSessionPanelMixin, NeuronUnitSlica
         a_session.replay = a_session.estimate_replay_epochs(**(default_replay_estimation_parameters | kwargs)).to_dataframe()
         return a_session.replay
 
+
+
+    def find_epoch_attributes(self):
+        """ Returns a dict of all "Epoch" type member properties of the instance. Returns things like "PBEs", "replays", etc
+        usage:
+            properties = curr_active_pipeline.sess.find_epoch_attributes()
+            properties
+        """
+        properties = {}
+        
+        for attr_name in dir(self):
+            try:
+                # Safely attempt to get the attribute value
+                a_prop = getattr(self, attr_name)
+                
+                # Check for the types you're interested in
+                if isinstance(a_prop, (Epoch, pd.DataFrame)):
+                    properties[attr_name] = a_prop
+            except (AttributeError, Exception):
+                # Skip properties that are broken or raise errors when accessed
+                continue
+                
+        return properties
+
+
     # ConcatenationInitializable protocol:
     @classmethod
     def concat(cls, objList: Union[Sequence, np.array]):
@@ -576,8 +859,8 @@ class DataSession(HDF_SerializationMixin, DataSessionPanelMixin, NeuronUnitSlica
         curr_position_df = curr_position_df.position.adding_lap_info(laps_df=curr_laps_df, inplace=False)        
 
         # update:
-        self.position._data['lap'] = curr_position_df['lap']
-        self.position._data['lap_dir'] = curr_position_df['lap_dir']
+        self.position._df['lap'] = curr_position_df['lap']
+        self.position._df['lap_dir'] = curr_position_df['lap_dir']
         
         # lap_specific_position_dfs = [curr_position_df.groupby('lap').get_group(i)[['t','x','y','lin_pos']] for i in sess.laps.lap_id] # dataframes split for each ID:
         return curr_position_df
@@ -594,8 +877,8 @@ class DataSession(HDF_SerializationMixin, DataSessionPanelMixin, NeuronUnitSlica
             curr_position_df = DataSession.compute_laps_position_df(curr_position_df, curr_laps_df)
             
             # update:
-            self.position._data['lap'] = curr_position_df['lap']
-            self.position._data['lap_dir'] = curr_position_df['lap_dir']
+            self.position._df['lap'] = curr_position_df['lap']
+            self.position._df['lap_dir'] = curr_position_df['lap_dir']
             
         """
         from neuropy.core.position import adding_lap_info_to_position_df
@@ -615,7 +898,7 @@ class DataSession(HDF_SerializationMixin, DataSessionPanelMixin, NeuronUnitSlica
         curr_spk_df = DataSession.compute_PBEs_spikes_df(self.spikes_df, curr_pbe_epoch_df) # column is added to the self.spikes_df, so the return value doesn't matter
         
         # update: Not needed because the dataframe is updated in the DataSession.compute_PBE_spikes_df function.
-        # self.neurons._data['PBE_id'] = curr_spk_df['PBE_id']
+        # self.neurons._df['PBE_id'] = curr_spk_df['PBE_id']
         # self.spikes_df['PBE_id'] = curr_spk_df['PBE_id']
         
         return self.spikes_df
@@ -652,7 +935,8 @@ class DataSession(HDF_SerializationMixin, DataSessionPanelMixin, NeuronUnitSlica
         pbe_start_stop_arr = pbe_epoch_df[['start','stop']].to_numpy()
         # pbe_identity_label = pbe_epoch_df['label'].to_numpy()
         pbe_identity_label = pbe_epoch_df.index.to_numpy() # currently using the index instead of the label.
-        spike_pbe_identity_arr = determine_event_interval_identity(spk_times_arr, pbe_start_stop_arr, pbe_identity_label, no_interval_fill_value=no_interval_fill_value)
+        spike_pbe_identity_arr = determine_event_interval_identity(spk_times_arr, pbe_start_stop_arr, pbe_identity_label, no_interval_fill_value=no_interval_fill_value,
+                                                                                                overlap_behavior=OverlappingIntervalsFallbackBehavior.FALLBACK_TO_SLOW_SEARCH) # #TODO 2025-07-01 14:49: - [ ] Crashes the Jupyter Kernal for Bapun's data. spk_times_arr.shape: (16318817,), 
         # Set the PBE_id of the spikes dataframe:
         spk_df.loc[:, 'PBE_id'] = spike_pbe_identity_arr
         # spk_df['PBE_id'] = spike_pbe_identity_arr

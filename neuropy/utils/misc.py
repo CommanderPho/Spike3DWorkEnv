@@ -2,8 +2,9 @@ import types
 from collections import namedtuple
 from enum import Enum, IntEnum, auto, unique
 from itertools import islice
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Any, Dict
 import numpy as np
+import nptyping as ND
 from nptyping import NDArray
 import pandas as pd
 from collections.abc import Iterable   # import directly from collections for Python < 3.3
@@ -14,6 +15,8 @@ import abc
 
 from datetime import datetime
 from enum import unique, Enum
+
+import re
 
 
 
@@ -35,7 +38,7 @@ class NonStringIterable(metaclass=abc.ABCMeta):
         return NotImplemented
     
 
-def is_iterable(value):
+def is_iterable(value) -> bool:
     """Returns true if the value is iterable but not a string.
     Args:
         value ([type]): [description]
@@ -97,6 +100,42 @@ def compute_paginated_grid_config(num_required_subplots, max_num_columns, max_su
         max_num_columns ([type]): [description]
         max_subplots_per_page ([type]): [description]
         data_indicies ([type], optional): your indicies into your original data that will also be accessible in the main loop. Defaults to None, in which case they will be the same as the linear indicies unless otherwise specified
+        
+        
+    Usage:
+    
+        from neuropy.utils.misc import compute_paginated_grid_config, RowColTuple, PaginatedGridIndexSpecifierTuple, RequiredSubplotsTuple
+
+        debug_print: bool = True
+        n_laps: int = len(lap_occupancy_seconds_dict)
+        included_lap_idxs = np.arange(n_laps)
+
+        ## INPUTS: n_laps, included_lap_idxs
+        subplot_no_pagination_configuration, included_combined_indicies_pages, page_grid_sizes = compute_paginated_grid_config(n_laps, max_num_columns=6, max_subplots_per_page=100, data_indicies=included_lap_idxs, last_figure_subplots_same_layout=True)
+        num_pages: int = len(included_combined_indicies_pages)
+        page_idx: int = 0 # page_idx is zero here because we only have one page:
+
+        img_item_array = []
+        other_components_array = []
+        plot_array = []
+
+        for (a_linear_index, curr_row, curr_col, curr_included_lap_index) in included_combined_indicies_pages[page_idx]:
+            # Need to convert to page specific:
+            curr_page_relative_linear_index: int = np.mod(a_linear_index, int(page_grid_sizes[page_idx].num_rows * page_grid_sizes[page_idx].num_columns))
+            curr_page_relative_row: int = np.mod(curr_row, page_grid_sizes[page_idx].num_rows)
+            curr_page_relative_col: int = np.mod(curr_col, page_grid_sizes[page_idx].num_columns)
+            is_first_column: bool = (curr_page_relative_col == 0)
+            is_first_row: bool = (curr_page_relative_row == 0)
+            is_last_column: bool = (curr_page_relative_col == (page_grid_sizes[page_idx].num_columns-1))
+            is_last_row: bool = (curr_page_relative_row == (page_grid_sizes[page_idx].num_rows-1))
+            if debug_print:
+                print(f'a_linear_index: {a_linear_index}, curr_page_relative_linear_index: {curr_page_relative_linear_index}, curr_row: {curr_row}, curr_col: {curr_col}, curr_page_relative_row: {curr_page_relative_row}, curr_page_relative_col: {curr_page_relative_col}, curr_included_lap_index: {curr_included_lap_index}')
+
+
+
+
+                
+        
     """
     
     def _compute_subplots_grid_layout(num_page_required_subplots, page_max_num_columns):
@@ -153,6 +192,28 @@ def print_seconds_human_readable(seconds):
         timestamp = '{}:{}'.format(timestamp, frac_seconds_string) # append the fracitonal seconds string to the timestamp string
     print(timestamp) # print the timestamp
     return h, m, s, fractional_seconds
+
+
+def capitalize_after_underscore(s: str, should_capitalize_start: bool=True) -> str:
+    """
+    Capitalizes the character immediately following each underscore in the input string.
+    Optionally capitalizes the first character of the string.
+
+    Args:
+        s (str): The input string.
+        should_capitalize_start (bool): If True, capitalizes the first character of the string.
+
+    Returns:
+        str: The transformed string with appropriate characters capitalized.
+        
+    Usage: 
+        from neuropy.utils.misc import capitalize_after_underscore
+        
+    """
+    if should_capitalize_start and s and not s[0].isupper():
+        s = s[0].upper() + s[1:]
+    return re.sub(r'_(\w)', lambda m: '_' + m.group(1).upper(), s)
+
 
 
 
@@ -222,7 +283,7 @@ def build_shuffled_ids(neuron_ids, num_shuffles: int = 1000, seed:Optional[int]=
 # ==================================================================================================================== #
 # Dictionary Helpers                                                                                                   #
 # ==================================================================================================================== #
-def split_list_of_dicts(list_of_dicts: list) -> dict:
+def split_list_of_dicts(list_of_dicts: List[Dict[Any, Any]]) -> Dict[Any, List[Any]]:
     """ Converts of a list<dict> (a list of dictionaries) where each element dictionary has the same keys to a dictionary of equal-length lists.
     
     Input:
@@ -330,7 +391,7 @@ def numpyify_array(sequences) -> NDArray:
 # ==================================================================================================================== #
 # Pandas Helpers                                                                                                       #
 # ==================================================================================================================== #
-def safe_pandas_get_group(dataframe_group, key):
+def safe_pandas_get_group(dataframe_group, key) -> pd.DataFrame:
     """ returns an empty dataframe if the key isn't found in the group.
     Usage:
         from neuropy.utils.misc import safe_pandas_get_group
@@ -383,4 +444,3 @@ class DateTimeFormat(Enum):
             DateTimeFormat.WHOLE_SECONDS.now_string
         """
         return self.datetime_to_string(datetime.now())
-        
