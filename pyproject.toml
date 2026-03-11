@@ -18,8 +18,18 @@ members = [
     "Spike3D",
 ]
 
+[tool.uv]
+environments = ["sys_platform == 'linux'"]
+override-dependencies = ["vtk>=9.2.4,<10"]
+
 [tool.uv.sources]
 pyPhoCoreHelpers = { workspace = true }
 NeuroPy = { workspace = true }
 pyPhoPlaceCellAnalysis = { workspace = true }
 Spike3D = { workspace = true }
+vedo = { git = "https://github.com/CommanderPho/vedo.git", rev = "release/pho-working" }
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4.4",
+]

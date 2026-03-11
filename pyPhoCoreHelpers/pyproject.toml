@@ -33,12 +33,12 @@ dev = [
     "rope>=1.14.0",
 ]
 viz = [
-    "pyvista>=0.43.0,<0.44",  # Supports newer VTK versions
+    "pyvista>=0.36.1,<0.44",
     "matplotlib>=3.6.3,<4",
     "vedo",
     "vtk>=9.2.4,<10",
     "hdf5plugin>=4.1.1,<5",
-    "silx>=1.1.2,<2",
+    "silx>=2.2.0,<3",
     "PyQt5Singleton>=0.1,<0.2",
     "QtPy>=2.1.0,<3",
     "PyQt5-sip>=12.11.1,<13",
@@ -52,8 +52,8 @@ default-groups = [
 ]
 
 [tool.uv.sources]
-vedo = { git = "https://github.com/CommanderPho/vedo.git", rev = "feature/merge-upstream" }
-neuropy = { path = "../NeuroPy", editable = true }
+vedo = { git = "https://github.com/CommanderPho/vedo.git", rev = "release/pho-working" }
+neuropy = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
