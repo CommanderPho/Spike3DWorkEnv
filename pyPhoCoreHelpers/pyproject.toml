@@ -53,7 +53,7 @@ default-groups = [
 
 [tool.uv.sources]
 vedo = { git = "https://github.com/CommanderPho/vedo.git", rev = "feature/merge-upstream" }
-neuropy = { path = "../NeuroPy", editable = true }
+neuropy = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

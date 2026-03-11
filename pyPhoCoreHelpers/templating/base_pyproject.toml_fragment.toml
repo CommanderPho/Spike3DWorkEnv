@@ -37,7 +37,7 @@ PyQt5Singleton = { version = "^0.1", optional = true}
 QtPy = { version = "^2.1.0", optional = true}
 PyQt5-sip = { version = "^12.11.1", optional = true}
 
-[tool.poetry.group.remote.dependencies]
+[tool.uv.source]
 
 
 [build-system]

@@ -1,2 +1,2 @@
-[tool.poetry.group.remote.dependencies]
+[tool.uv.source]
 neuropy = {path = "../NeuroPy", develop=true}

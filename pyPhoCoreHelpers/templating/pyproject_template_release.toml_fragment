@@ -1,2 +1,2 @@
-[tool.poetry.group.remote.dependencies]
+[tool.uv.source]
 neuropy = {git = "https://github.com/CommanderPho/NeuroPy.git", rev = "feature/safe-advance"}

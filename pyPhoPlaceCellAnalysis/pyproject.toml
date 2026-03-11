@@ -88,9 +88,12 @@ default-groups = [
 [tool.uv.sources]
 ansi2html = { git = "https://github.com/CommanderPho/ansi2html.git", rev = "main" }
 mpl-multitab = { git = "https://github.com/CommanderPho/mpl-multitab.git", rev = "pho_compat" }
-neuropy = { path = "../NeuroPy", editable = true }
+neuropy = { workspace = true }
 pybursts = { git = "https://github.com/CommanderPho/pybursts.git", rev = "master" }
-pyphocorehelpers = { path = "../pyPhoCoreHelpers", editable = true }
+pyphocorehelpers = { workspace = true }
+
+pyqode-core = {path = "../pyqode.core/dist/current.whl"} # pyqode_core-3.0.0-py2.py3-none-any.whl
+pyqode-python = {path = "../pyqode.python/dist/current.whl"}
 
 [build-system]
 requires = ["hatchling"]

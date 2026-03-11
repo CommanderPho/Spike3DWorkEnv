@@ -1,8 +1,8 @@
 [tool.uv.sources]
 qt_style_sheet_inspector = { git = "https://github.com/CommanderPho/qt_style_sheet_inspector.git", rev = "master" }
-neuropy = { path = "../NeuroPy", editable=true }
-pyphocorehelpers = { path = "../pyPhoCoreHelpers", editable=true }
-pyphoplacecellanalysis = { path = "../pyPhoPlaceCellAnalysis", editable=true }
+neuropy = { workspace = true }
+pyphocorehelpers = { workspace = true }
+pyphoplacecellanalysis = { workspace = true }
 mpl-multitab = { git = "https://github.com/CommanderPho/mpl-multitab.git", rev = "pho_compat" }
 ansi2html = { git = "https://github.com/CommanderPho/ansi2html.git", rev = "main" }
 vedo = { git = "https://github.com/CommanderPho/vedo.git", rev = "release/pho-working" }
