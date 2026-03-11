@@ -1,0 +1,33 @@
+{
+"files.exclude": {
+  "**/__pycache__": true,
+  "**/.classpath": true,
+  "**/.factorypath": true,
+  "**/.ipynb_checkpoints": true,
+  "**/.project": true,
+  "**/.qt_for_python": true,
+  "**/.settings": true,
+  "**/.spyproject": true,
+  "**/.virtual_documents": true,
+  "**/.vscode": true,
+  "**/*.asv": true,
+  "**/*desktop.ini": true,
+  "**/*Thumbs.db": true,
+  "pyqode.core": true,
+  "pyqode.python": true
+},
+"python.testing.unittestArgs": [
+  "-v",
+  "-s",
+  "./NeuroPy",
+  "-p",
+  "*test*.py"
+],
+"python.testing.pytestEnabled": false,
+"python.testing.unittestEnabled": true,
+"python.linting.enabled": false,
+"dvc.dvcPath": "dvc",
+"dvc.pythonPath": "C:/Users/pho/AppData/Local/pypoetry/Cache/virtualenvs/spike3d-WtdfU5rp-py3.9/Scripts/python.exe",
+"pythonTestExplorer.testFramework": "unittest",
+"python.defaultInterpreterPath": "C:/Users/pho/AppData/Local/pypoetry/Cache/virtualenvs/spike3d-WtdfU5rp-py3.9/Scripts/python.exe",
+}
