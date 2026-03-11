@@ -1,0 +1,5 @@
+[core]
+    remote = pho_shared_gdrive
+['remote "pho_shared_gdrive"']
+    url = gdrive://12HkM5dUehnfkxKEmG_-iYGghObSaEL0H/dvcstore
+

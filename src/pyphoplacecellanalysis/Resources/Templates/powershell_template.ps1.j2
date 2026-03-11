@@ -1,0 +1,244 @@
+# Define a ScriptBlock to activate the virtual environment, change directory, and execute the Python script
+$scriptBlock = {
+    param([string]$activatePath, [string]$pythonExec, [string]$scriptPath, [string]$parentDir)
+    try {
+        & $activatePath | Out-Null
+        Set-Location -Path $parentDir
+        $startTime = Get-Date
+        Write-Host "Starting script: $scriptPath at time: $($startTime.ToString())"
+        
+        # Inline status file removal
+        $statusFile = Join-Path $parentDir "status.json"
+        if (Test-Path $statusFile) {
+            Remove-Item $statusFile -Force
+        }
+        
+        & $pythonExec $scriptPath | Out-Null
+        
+        $endTime = Get-Date
+        $duration = $endTime - $startTime
+        
+        # Inline status file reading
+        $pythonStatus = $null
+        if (Test-Path $statusFile) {
+            try {
+                $pythonStatus = Get-Content $statusFile -Raw | ConvertFrom-Json
+            } catch {
+                Write-Warning "Failed to read status file: $statusFile - Error: $_"
+            }
+        }
+        
+        Write-Host "Completed script: $scriptPath at time: $($endTime.ToString()) with duration: $($duration.ToString())"
+        return @{
+            ScriptPath = $scriptPath
+            StartTime = $startTime.ToString()
+            EndTime = $endTime.ToString()
+            Duration = $duration.ToString()
+            PythonStatus = $pythonStatus
+        }
+    } catch {
+        Write-Error "An error occurred for script: $scriptPath - Error: $_"
+        return @{
+            ScriptPath = $scriptPath
+            StartTime = $startTime.ToString()
+            EndTime = (Get-Date).ToString()
+            Duration = "Failed"
+            PythonStatus = $null
+        }
+    }
+}
+
+# Function to manage job queue and process completed jobs
+function Manage-JobQueue {
+    param (
+        [int]$jobLimit,
+        [ref]$jobQueue,
+        [ref]$runHistory
+    )
+
+    while ($jobQueue.Value.Count -ge $jobLimit) {
+        # Check for completed jobs and remove them from the queue
+        $completedJobs = @($jobQueue.Value | Where-Object { $_.State -eq 'Completed' })
+
+        if ($completedJobs) {
+            foreach ($job in $completedJobs) {
+                # Process the job results into run history
+                $jobOutputs = Receive-Job -Job $job
+                if ($jobOutputs -ne $null) {
+                    $hashtable = $jobOutputs | Where-Object { $_ -is [System.Collections.Hashtable] } | Select-Object -Last 1
+                    if ($hashtable) {
+                        $runHistory.Value += New-Object -TypeName PSObject -Property $hashtable
+                        
+                        # Enhanced logging with Python status
+                        $statusInfo = ""
+                        if ($hashtable.PythonStatus) {
+                            $statusInfo = " - Python Status: $($hashtable.PythonStatus.status)"
+                            if ($hashtable.PythonStatus.errors) {
+                                $statusInfo += " (Errors: $($hashtable.PythonStatus.errors))"
+                            }
+                            if ($hashtable.PythonStatus.session_complete_identifier) {
+                                $statusInfo += " (session_complete_identifier: $($hashtable.PythonStatus.session_complete_identifier))"
+                            }
+
+                        }
+                        
+                        Write-Host "Job $($job.Id) with script '$($hashtable.ScriptPath)' has completed.$statusInfo"
+                    } else {
+                        Write-Error "Completed Job $($job.Id) did not return a hashtable."
+                    }
+                } else {
+                    Write-Error "Completed Job $($job.Id) did not produce any output."
+                }
+
+                # Remove completed job from queue
+                $job | Remove-Job
+            }
+            $jobQueue.Value = @($jobQueue.Value | Where-Object { $_.State -ne 'Completed' })
+        }
+
+        # If no jobs have completed, wait a bit before checking again
+        if (-not $completedJobs) {
+            Start-Sleep -Seconds 3
+        }
+    }
+}
+
+# Function to start a job and add it to the queue
+function Start-NewJob {
+    param (
+        [ref]$jobQueue,
+        [scriptblock]$scriptBlock,
+        [string[]]$arguments
+    )
+
+    $job = Start-Job -ScriptBlock $scriptBlock -ArgumentList $arguments
+    $jobQueue.Value += $job  # Append job to the queue as an array element
+    Write-Host "Starting Job for '$($arguments[2])'"
+}
+
+# Function to wait for all queued jobs to complete and log their outputs
+function WaitForAllJobs {
+    param (
+        [ref]$jobQueue,
+        [ref]$runHistory
+    )
+
+    while ($jobQueue.Value.Count -gt 0) {
+        $completedJobs = @($jobQueue.Value | Wait-Job -Any)
+
+        # Receive and log output from completed jobs
+        foreach ($job in $completedJobs) {
+            # Receive all the outputs from the job
+            $jobOutputs = Receive-Job -Job $job
+
+            # Verify that we have received some outputs
+            if ($jobOutputs -ne $null) {
+                # Look for the hashtable we expect among job outputs
+                $hashtable = $jobOutputs | Where-Object { $_ -is [System.Collections.Hashtable] } | Select-Object -Last 1
+
+                if ($hashtable) {
+                    $runHistory.Value += New-Object -TypeName PSObject -Property $hashtable
+                    
+                    # Enhanced logging with Python status
+                    $statusInfo = ""
+                    if ($hashtable.PythonStatus) {
+                        $statusInfo = " - Python Status: $($hashtable.PythonStatus.status)"
+                        if ($hashtable.PythonStatus.session_context) {
+                            $statusInfo += " (Session: $($hashtable.PythonStatus.session_context))"
+                        }
+                        if ($hashtable.PythonStatus.session_complete_identifier) {
+                            $statusInfo += " (session_complete_identifier: $($hashtable.PythonStatus.session_complete_identifier))"
+                        }
+                        if ($hashtable.PythonStatus.errors) {
+                            $statusInfo += " (Errors: $($hashtable.PythonStatus.errors))"
+                        }
+                    }
+                    
+                    Write-Host "Job $($job.Id) with script '$($hashtable.ScriptPath)' started at $($hashtable.StartTime) and took $($hashtable.Duration) has completed.$statusInfo"
+                } else {
+                    Write-Error "Job $($job.Id) did not return a hashtable."
+                    # Debug - Write all outputs to see what was received
+                    $jobOutputs | ForEach-Object { Write-Host "Output: $_" }
+                }
+            } else {
+                Write-Error "Job $($job.Id) did not produce any output."
+            }
+
+            $jobQueue.Value = $jobQueue.Value | Where-Object { $_.Id -ne $job.Id }
+        }
+
+        # Clean up completed job objects
+        Remove-Job -Job $completedJobs
+    }
+}
+
+# Function to flatten nested objects for CSV export
+function ConvertTo-FlatObject {
+    param (
+        [Parameter(ValueFromPipeline)]
+        $InputObject
+    )
+    
+    process {
+        $flatObject = @{}
+        
+        foreach ($property in $InputObject.PSObject.Properties) {
+            $name = $property.Name
+            $value = $property.Value
+            
+            if ($value -is [PSCustomObject] -or $value -is [System.Collections.Hashtable]) {
+                # Flatten nested objects
+                foreach ($nestedProperty in $value.PSObject.Properties) {
+                    $flatObject["$name.$($nestedProperty.Name)"] = $nestedProperty.Value
+                }
+            } else {
+                $flatObject[$name] = $value
+            }
+        }
+        
+        return New-Object -TypeName PSObject -Property $flatObject
+    }
+}
+
+# Initialize job queue and set the job limit
+$jobQueue = @()
+$jobLimit = {{ max_concurrent_jobs }}
+$runHistory = @()
+
+{% for script in script_paths %}
+Manage-JobQueue -jobLimit $jobLimit -jobQueue ([ref]$jobQueue) -runHistory ([ref]$runHistory) # Wait until there is a free slot to run a new job
+Start-NewJob -jobQueue ([ref]$jobQueue) -scriptBlock $scriptBlock -arguments @('{{activate_path}}', '{{python_executable}}', '{{script}}', (Get-Item "{{script}}").DirectoryName)
+{% endfor %}
+
+# Wait for all queued jobs to complete, logging after each completes
+WaitForAllJobs -jobQueue ([ref]$jobQueue) -runHistory ([ref]$runHistory)
+Write-Host "All jobs have been processed."
+
+# Export the run history to a CSV file
+Write-Host "Exporting run history to CSV file..."
+$csvPath = [System.IO.Path]::Combine((Get-Location).Path, "run_history.csv")
+
+# Flatten the objects for better CSV export
+$flattenedHistory = $runHistory | ConvertTo-FlatObject
+
+$flattenedHistory | Export-Csv -Path $csvPath -NoTypeInformation -Append
+Write-Host "Run history has been exported to $csvPath"
+
+# Optional: Also export a detailed JSON file for full data preservation
+$jsonPath = [System.IO.Path]::Combine((Get-Location).Path, "run_history.json")
+$runHistory | ConvertTo-Json -Depth 10 | Set-Content -Path $jsonPath
+Write-Host "Detailed run history has been exported to $jsonPath"
+
+# Display summary
+Write-Host "`nSummary of completed jobs:"
+foreach ($job in $runHistory) {
+    $scriptName = [System.IO.Path]::GetFileNameWithoutExtension($job.ScriptPath)
+    $status = if ($job.PythonStatus -and $job.PythonStatus.status) { $job.PythonStatus.status } else { "Unknown" }
+    $duration = $job.Duration
+    $errors = if ($job.PythonStatus -and $job.PythonStatus.errors) { $job.PythonStatus.errors } else { "<No Errors>" }
+    $session_complete_identifier = if ($job.PythonStatus -and $job.PythonStatus.session_complete_identifier) { $job.PythonStatus.session_complete_identifier } else { "<No Complete Session Identifier>" }
+
+    Write-Host "  $scriptName - Status: $status - Errors: $errors - Duration: $duration - CompleteSessionID: $session_complete_identifier"
+}
+
+Write-Host "`nAll processing complete!"
