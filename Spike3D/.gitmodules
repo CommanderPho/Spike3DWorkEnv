@@ -1,6 +1,0 @@
-[submodule "pyqode.core"]
-	path = pyqode.core
-	url = https://github.com/CommanderPho/pyqode.core.git
-[submodule "pyqode.python"]
-	path = pyqode.python
-	url = https://github.com/CommanderPho/pyqode.python.git

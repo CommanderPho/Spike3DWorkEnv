@@ -1,0 +1,235 @@
+{
+	"folders": [
+		{
+			"name": "Spike3D",
+			"path": "../../."
+		},
+		{
+			"path": "../../../NeuroPy"
+		},
+		{
+			"path": "../../../pyPhoPlaceCellAnalysis"
+		},
+		{
+			"path": "../../../pyPhoCoreHelpers"
+		},
+		{
+			"path": "../../../SCRIPTS"
+		}
+	],
+	"settings": {
+		// "python.pythonPath": "C:\\Users\\pho\\repos\\Spike3DWorkEnv\\Spike3D\\.venv\\Scripts\\python.exe", //"C:\\Users\\pho\\miniconda3\\envs\\phoviz_ultimate\\python.exe",
+		"python.defaultInterpreterPath": "C:\\Users\\pho\\repos\\Spike3DWorkEnv\\Spike3D\\.venv\\Scripts\\python.exe",
+		// "python.defaultInterpreterPath": "/home/halechr/Library/VSCode/green/.venv_green/bin/python",
+		"jupyter.jupyterServerType": "local",
+		"files.exclude": {
+			"**/.classpath": true,
+			"**/.factorypath": true,
+			"**/.ipynb_checkpoints": true,
+			"**/.project": true,
+			"**/.settings": true,
+			"**/.spyproject": true,
+			"**/.virtual_documents": true,
+			"**/.vscode": true,
+			"**/*.7z": true,
+			"**/Spike3D/.venv/*": true, "**/.venv_black": true,"**/.venv_yellow": true,"**/.venv_teal": true,
+		},
+		"python.analysis.logLevel": "Error",
+		"workbench.colorCustomizations": {
+			"editor.lineHighlightBackground": "#a0a0a02d",
+			"editor.lineHighlightBorder": "#d19f9f1f",
+			"scrollbarSlider.background": "#fffb0057",
+			"scrollbarSlider.hoverBackground": "#fffb0082",
+			"scrollbarSlider.activeBackground": "#ccff00df",
+			"notebook.outputContainerBackgroundColor": "#395a3e50",
+			"notebook.outputContainerBorderColor": "#10ff10",
+			"notebook.focusedCellBorder": "#ffff00da",
+			"notebook.focusedEditorBorder": "#f6ff00",
+			"notebook.inactiveFocusedCellBorder": "#ffff0063",
+			"tab.activeBorder": "#2E9341",
+			"statusBar.background": "#45bfe8",
+			"statusBar.foreground": "#000000",
+			"tab.activeBackground": "#2E9341",
+			"statusBarItem.warningBackground": "#45bfe8",
+			"statusBarItem.warningForeground": "#000000",
+			"statusBarItem.warningHoverBackground": "#45bfe8",
+			"statusBarItem.warningHoverForeground": "#00000090",
+			"statusBarItem.remoteBackground": "#52ccf5",
+			"statusBarItem.remoteForeground": "#000000",
+			"statusBarItem.remoteHoverBackground": "#5fd9ff",
+			"statusBarItem.remoteHoverForeground": "#00000090",
+			"statusBar.border": "#45bfe8",
+			"statusBar.debuggingBackground": "#45bfe8",
+			"statusBar.debuggingForeground": "#000000",
+			"statusBar.debuggingBorder": "#45bfe8",
+			"statusBar.noFolderBackground": "#45bfe8",
+			"statusBar.noFolderForeground": "#000000",
+			"statusBar.noFolderBorder": "#45bfe8",
+			"statusBar.prominentBackground": "#45bfe8",
+			"statusBar.prominentForeground": "#000000",
+			"statusBar.prominentHoverBackground": "#45bfe8",
+			"statusBar.prominentHoverForeground": "#00000090",
+			"focusBorder": "#45bfe899",
+			"progressBar.background": "#45bfe8",
+			"textLink.foreground": "#85ffff",
+			"textLink.activeForeground": "#92ffff",
+			"selection.background": "#38b2db",
+			"list.highlightForeground": "#45bfe8",
+			"list.focusAndSelectionOutline": "#45bfe899",
+			"button.background": "#45bfe8",
+			"button.foreground": "#000000",
+			"button.hoverBackground": "#52ccf5",
+			"tab.activeBorderTop": "#52ccf5",
+			"pickerGroup.foreground": "#52ccf5",
+			"list.activeSelectionBackground": "#45bfe84d",
+			"panelTitle.activeBorder": "#52ccf5",
+			"activityBar.activeBorder": "#45bfe8",
+			"activityBarBadge.foreground": "#000000",
+			"activityBarBadge.background": "#45bfe8"
+		},
+		// "qtForPython.uic.path": "C:/Users/pho/miniconda3/envs/phoviz_ultimate/Lib/site-packages/qt5_applications/Qt/bin/uic.exe",
+		"qtForPython.uic.path": "C:/Users/pho/miniconda3/envs/phoviz_ultimasste/Scripts/pyuic5.exe",
+		"search.exclude": {
+			"**/.ipynb_checkpoints": true
+		},
+		"qtForPython.uic.args": [
+			"-o \"${fileDirname}${pathSeparator}Uic_AUTOGEN_${fileBasenameNoExtension}.py\"",
+			"--execute",
+			"--import-from \"pyphoplacecellanalysis.Resources\"",
+			"--resource-suffix \"\""
+		],
+		"qtForPython.rcc.args": [
+			"-o \"${fileDirname}${pathSeparator}${fileBasenameNoExtension}.py\""
+		],
+		"colorTabs.config": [
+			{
+				"regex": "Spike3D/scripts\\.*"
+			},
+			{
+				"regex": "Spike3D/LibrariesExamples/.*"
+			},
+			{
+				"regex": ".*/../../../NeuroPy/neuropy/**/*.py"
+			},
+			{
+				"regex": ".*/EXTERNAL/.*"
+			},
+			{
+				"regex": ".*/templating/.*"
+			}
+		],
+		"editor.scrollbar.scrollByPage": true,
+		"actionButtons": {
+			"commands": [
+				{
+					"name": "Back",
+					"color": "white",
+					"useVsCodeApi": true,
+					"command": "workbench.action.navigateBack"
+				},
+				{
+					"name": "Forward",
+					"color": "white",
+					"useVsCodeApi": true,
+					"command": "workbench.action.navigateForward"
+				},
+				{
+					"name": "Toggle Cell Output Scrolling",
+					"color": "orange",
+					"useVsCodeApi": true,
+					"command": "notebook.cell.toggleOutputScrolling"
+				},
+				{
+					"name": "Restart Python Language Server",
+					"color": "#00FF00",
+					"useVsCodeApi": true,
+					"command": "python.analysis.restartLanguageServer"
+				},
+				// {
+				//     "name": "Toggle line numbers",
+				//     "color": "#00FF00",
+				//     "useVsCodeApi": true,
+				//     "command": "python.analysis.restartLanguageServer"
+				// },
+				{
+					"name": "VSCode Dev Consoler",
+					"color": "#99CCFF",
+					"useVsCodeApi": true,
+					"command": "workbench.action.toggleDevTools"
+				},
+				{
+					"name": "PyQtGraph Examples",
+					"tooltip": "Launch PyQtGraph examples browser",
+					"color": "#d4e6ec",
+					"useVsCodeApi": false,
+					// "command": "cd C:\\Users\\pho\\repos\\Spike3DWorkEnv\\Spike3D && poetry run python \"LibrariesExamples\\PyQtPlot\\PyQtPlot_EXAMPLES.py\""
+					"command": "cd ${workspaceFolder} && poetry run python \"LibrariesExamples\\PyQtPlot\\PyQtPlot_EXAMPLES.py\""
+				},
+				{
+					"name": "ViTables Launch",
+					"tooltip": "Launch ViTables pytables GUI (HDF5, etc)",
+					"color": "#ffed78",
+					"useVsCodeApi": false,
+					"command": "C:\\Users\\pho\\repos\\Spike3DWorkEnv\\Spike3D\\.venv\\Scripts\\python.exe -m vitables"
+				},
+				{
+					"name": "JupyterBook Build",
+					"tooltip": "Build the JupyterBook project",
+					"color": "#ed9600",
+					"useVsCodeApi": false,
+					"command": "jupyter-book build EXTERNAL/PhoDibaPaper2024Book; C:/Users/pho/repos/Spike3DWorkEnv/Spike3D/.venv/Scripts/python.exe c:/Users/pho/repos/Spike3DWorkEnv/Spike3D/scripts/open_generated_jupyter_book_docs.py"
+				},
+                {
+                    "name": "standalone spike_raster_window Launch",
+                    "tooltip": "Launch standalone spike_raster_window",
+                    "color": "#aaed78",
+                    "useVsCodeApi": false,
+                    "command": "${workspaceFolder}/.venv/bin/python -m PyQtInspect --direct --qt-support=pyqt5 --file ${workspaceFolder}/../pyPhoPlaceCellAnalysis/src/pyphoplacecellanalysis/GUI/Qt/SpikeRasterWindows/Spike3DRasterWindowWidget.py"
+                },
+                // {
+                //     "name": "standalone spike_raster_window Launch",
+                //     "tooltip": "Launch standalone spike_raster_window",
+                //     "color": "#aaed78",
+                //     "useVsCodeApi": false,
+                //     "command": "${workspaceFolder}/.venv/bin/python -m PyQtInspect --direct --qt-support=pyqt5 --file ${workspaceFolder}/pyPhoPlaceCellAnalysis/src/pyphoplacecellanalysis/GUI/Qt/SpikeRasterWindows/Spike3DRasterWindowWidget.py"
+                // },
+
+			],
+			"defaultColor": "grey",
+			"reloadButton": "↻",
+			"loadNpmCommands": true
+		},
+		"cursorpyright.analysis.logLevel": "Error",
+		"window.title": "h:\\TEMP\\Spike3DEnv_ExploreUpgrade\\Spike3DWorkEnv\\Spike3D\\EXTERNAL\\VSCode_Workspaces\\PhoPy3DPositionAnalysis_PhoLibsTopLevelPathsForRefactoring_workspace.code-workspace",
+		"windowColor.mainColor": "#c55007",
+	},
+	"extensions": {
+		"recommendations": [
+			"hbenl.vscode-test-explorer",
+			"h5web.vscode-h5web",
+			"phohale.color-tabs-vscode-ext",
+			"noname.editor-tab-resizer",
+			"adamerose.better-outline",
+			"phohale.version-status-bar",
+			"danielbayley.custom-app-icons"
+		]
+	},
+	"tasks": {
+		"version": "2.0.0",
+		"tasks": [
+			{
+				"label": "Launch ViTables",
+				"type": "shell",
+				"command": "${workspaceFolder}/.venv/bin/python -m vitables",
+				"problemMatcher": [],
+				"presentation": {
+					"echo": false,
+					"focus": false,
+					"reveal": "silent",
+					"panel": "shared",
+					"showReuseMessage": false
+				}
+			},
+		]
+	}
+}
