@@ -1,0 +1,262 @@
+{
+  "main": {
+    "id": "2618f7b3672c4deb",
+    "type": "split",
+    "children": [
+      {
+        "id": "77da743d7f00a926",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "8a12e9da6e42cfa0",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "PoetryEnvironments/PoetryEnvironmentExamples.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "PoetryEnvironmentExamples"
+            }
+          },
+          {
+            "id": "1073da690e4e418d",
+            "type": "leaf",
+            "pinned": true,
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "PoetryEnvironments/PoetryEnvironmentExamples.md",
+                "mode": "source",
+                "source": false
+              },
+              "pinned": true,
+              "icon": "lucide-file",
+              "title": "PoetryEnvironmentExamples"
+            }
+          },
+          {
+            "id": "ce25f5c34b29480c",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "2025-03-09_proper-PyQtWebEngine-Install_in_custom_non_poetry_env.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "2025-03-09_proper-PyQtWebEngine-Install_in_custom_non_poetry_env"
+            }
+          },
+          {
+            "id": "e084721044ea73a9",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "2025-09-11.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "2025-09-11"
+            }
+          }
+        ],
+        "currentTab": 3
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "492c216e5f3db69b",
+    "type": "split",
+    "children": [
+      {
+        "id": "6fbb06043309c557",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "4ee83e81474cd484",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "4a5b5d02c5e7f318",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "76a3377d89405222",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 451.5
+  },
+  "right": {
+    "id": "2d5b05803d90d54f",
+    "type": "split",
+    "children": [
+      {
+        "id": "1343a96e14697bdd",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "fb34f7d5849aaeb1",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "PoetryEnvironments/PoetryEnvironmentExamples.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for PoetryEnvironmentExamples"
+            }
+          },
+          {
+            "id": "c98f0779660dca07",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "PoetryEnvironments/PoetryEnvironmentExamples.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from PoetryEnvironmentExamples"
+            }
+          },
+          {
+            "id": "19f6376a31ddf28c",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "b3b0b9f950154adc",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "PoetryEnvironments/PoetryEnvironmentExamples.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of PoetryEnvironmentExamples"
+            }
+          },
+          {
+            "id": "054682473e70828a",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "bases:Create new base": false,
+      "daily-notes:Open today's daily note": false,
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false
+    }
+  },
+  "active": "e084721044ea73a9",
+  "lastOpenFiles": [
+    "2025-09-11.md",
+    "2025-03-09_proper-PyQtWebEngine-Install_in_custom_non_poetry_env.md",
+    "Untitled.md",
+    "DocumentationNotebooks/Setup Virtualenv Without Poetry notebook.dib",
+    "2023-02-22-pyqode install.md",
+    "PoetryEnvironments/PoetryEnvironmentExamples.md",
+    "2025-04-09.md",
+    "DocumentationNotebooks/Untitled.md",
+    "UnsortedErrorLogs/scratchpads/d0d3afab60d6fc99d19bc9516cb9076a/scratch_1.py",
+    "Pasted image 20250408175159.png",
+    "Spike3DDevDocsBook/markdown-notebooks.md",
+    "Spike3DDevDocsBook/markdown.md",
+    "Spike3DDevDocsBook/logo.png",
+    "Spike3DDevDocsBook/intro.md",
+    "2023-08-03 - HDF5 Serialization Realization.md",
+    "2023-08-10 - Output Files and Exports.md",
+    "DirectionalLaps.md",
+    "jupyter-lab-debugging.md",
+    "multiprocessing_macOS_pickle_nmap.md",
+    "VSCode Idea - copy structure of class (for referencing).md",
+    "WindowHierarchy.md",
+    "DataStructureDocumentation/add_renderables_menu.md",
+    "DataStructureDocumentation/BasePositionDecoder.md",
+    "DataStructureDocumentation/BayesianPlacemapPositionDecoder.md",
+    "DataStructureDocumentation/SurpriseAnalysisResult.md",
+    "DataStructureDocumentation/ComputationResult.md",
+    "Untitled-4.md",
+    "PhoInitialRepoSetupNotes2022.md"
+  ]
+}
