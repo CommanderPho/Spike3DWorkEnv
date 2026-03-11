@@ -1,0 +1,74 @@
+# Temporary and binary files
+*~
+*.py[cod]
+*.so
+*.cfg
+!.isort.cfg
+!setup.cfg
+*.orig
+*.log
+*.pot
+__pycache__/*
+.cache/*
+.*.swp
+*/.ipynb_checkpoints/*
+.DS_Store
+
+# Project files
+.ropeproject
+.project
+.pydevproject
+.settings
+.idea
+.vscode
+tags
+
+# Package files
+*.egg
+*.eggs/
+.installed.cfg
+*.egg-info
+
+# Unittest and coverage
+htmlcov/*
+.coverage
+.coverage.*
+junit*.xml
+coverage.xml
+.pytest_cache/
+
+# Build and docs folder/files
+build/*
+dist/*
+sdist/*
+docs/api/*
+docs/_rst/*
+docs/_build/*
+cover/*
+MANIFEST
+
+# Per-project virtualenvs
+.venv*/
+.conda*/
+# Uic_AUTOGEN_*.py # Needs to be omitted now that I'm loading .ui files directly. They were found to be missing on linux workstation.
+src/pyphoplacecellanalysis/External/pyqtgraph/**/Uic_AUTOGEN_*Template.py
+src/pyphoplacecellanalysis/External/pyqtgraph/examples/Uic_AUTOGEN_DateAxisItem_QtDesigner.py
+src/pyphoplacecellanalysis/External/pyqtgraph/examples/Uic_AUTOGEN_designerExample.py
+src/pyphoplacecellanalysis/Resources/Icons/unused
+src/pyphoplacecellanalysis/Resources/rc_ActionIcons.py
+src/pyphoplacecellanalysis/Resources/rc_GuiResources.py
+desktop.ini
+*.sha256
+src/cscope.files
+src/cscope.out
+src/myproject.db
+.sourcery.yaml
+src/pyphoplacecellanalysis/Resources/Icons/visualizations/templates_1D.ico
+tests/test_raster_Functions_spikes_df.pkl
+src/pyphoplacecellanalysis/External/test.hdf5
+*.autosave
+**/__pycache__
+**/.venv*
+
+typings
+src/pyphoplacecellanalysis/test_burst_detection.png

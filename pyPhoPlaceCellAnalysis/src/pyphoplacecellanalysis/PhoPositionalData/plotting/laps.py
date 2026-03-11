@@ -1,0 +1,766 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+@author: pho
+"""
+from copy import deepcopy
+from itertools import islice # for Pagination class
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection, BrokenBarHCollection
+from matplotlib.colors import ListedColormap, BoundaryNorm
+import pyvista as pv
+import pyvistaqt as pvqt
+
+from neuropy.utils.mixins.dict_representable import override_dict
+from neuropy.utils.matplotlib_helpers import plot_position_curves_figure # for plot_laps_2d
+
+from pyphocorehelpers.function_helpers import function_attributes
+
+from pyphoplacecellanalysis.Pho3D.PyVista.spikeAndPositions import _build_flat_arena_data, perform_plot_flat_arena
+from pyphoplacecellanalysis.GUI.PyVista.InteractivePlotter.Mixins.LapsVisualizationMixin import LapsVisualizationMixin
+from pyphocorehelpers.gui.PyVista.PhoCustomVtkWidgets import PhoWidgetHelper
+from pyphocorehelpers.DataStructure.RenderPlots.MatplotLibRenderPlots import MatplotlibRenderPlots
+from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.ContainerBased.PhoContainerTool import GenericMatplotlibContainer
+
+
+""" 
+
+NOTE: This is a GOOD, general class that offers both 2D (matplot) and 3D (pyvista) functionality
+
+
+
+from pyphoplacecellanalysis.PhoPositionalData.plotting.laps import plot_lap_trajectories_2d
+# Complete Version:
+fig, axs, laps_pages = plot_lap_trajectories_2d(curr_active_pipeline.sess, curr_num_subplots=len(curr_active_pipeline.sess.laps.lap_id), active_page_index=0)
+# Paginated Version:
+fig, axs, laps_pages = plot_lap_trajectories_2d(curr_active_pipeline.sess, curr_num_subplots=22, active_page_index=0)
+fig, axs, laps_pages = plot_lap_trajectories_2d(curr_active_pipeline.sess, curr_num_subplots=22, active_page_index=1)
+
+"""
+
+# ==================================================================================================================== #
+# HELPER FUNCTIONS                                                                                                     #
+# ==================================================================================================================== #
+@function_attributes(short_name=None, tags=['matplotlib', 'arrow', 'line2D'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2025-02-21 05:25', related_items=[])
+def _plot_helper_add_arrow(line, position=None, position_mode='rel', direction='right', size=15, color=None):
+    """
+    add an arrow to a Matplotlib line object, such as a line2D.
+
+    line:       Line2D object
+    position:   x-position of the arrow. If None, mean of xdata is taken
+    position_mode: 
+        # position_mode='rel': means a value between 0.0 (representing the start of the line) and 1.0 (the end) is provided.
+        # position_mode='abs': means an absolute point is provided in [x, y] coordinates. Finds the nearest location to that point on the line.
+        # position_mode='index': means an index into the line data is provided
+    direction:  'left' or 'right'
+    size:       size of the arrow in fontsize points
+    color:      if None, line color is taken.
+    
+    Usage:
+                add_arrow(line[0], position=0, position_mode='index', direction='right', size=20, color='green') # start
+                add_arrow(line[0], position=None, position_mode='index', direction='right', size=20, color='yellow') # middle
+                add_arrow(line[0], position=curr_lap_num_points, position_mode='index', direction='right', size=20, color='red') # end
+                add_arrow(line[0], position=curr_lap_endpoint, position_mode='abs', direction='right', size=50, color='blue')
+                add_arrow(line[0], position=None, position_mode='rel', direction='right', size=50, color='blue')
+
+
+    ## TODO: general enough to factor out for REUSE?
+    """
+    if color is None:
+        color = line.get_color()
+
+    if isinstance(line, LineCollection):
+        # --- Extract x/y data back ---
+        segments = line.get_segments()  # list of (N, 2) arrays
+        xdata = np.concatenate([seg[:, 0] for seg in segments])
+        ydata = np.concatenate([seg[:, 1] for seg in segments])
+    else:
+        xdata = line.get_xdata()
+        ydata = line.get_ydata()
+        
+
+    num_points: int = len(xdata)
+    
+    if position is None:
+        position = xdata.mean()
+        position_mode = 'abs_nearest'
+        
+    if position_mode == 'rel':
+        # position_mode='rel': means a value between 0.0 (representing the start of the line) and 1.0 (the end) is provided.
+        
+        start_ind = np.round(float(position) * float(num_points))
+    elif position_mode == 'abs':
+        # position_mode='abs': means an absolute point is provided in [x, y] coordinates. Finds the nearest location to that point on the line.
+        # find closest index
+        start_ind = np.argmin(np.absolute(xdata - position[0]))
+       
+    elif position_mode == 'abs_nearest':
+        # position_mode='abs': means an absolute point is provided in [x, y] coordinates. Finds the nearest location to that point on the line.
+        # find closest index
+        start_ind = np.argmin(np.absolute(xdata - position))
+        
+    elif position_mode == 'index':
+        # position_mode='index': means an index into the line data is provided
+        start_ind = position        
+    else:
+        raise ValueError
+        
+    # compute the end index based on the arrow direction:
+    if direction == 'right':
+        end_ind = start_ind + 1
+    else:
+        end_ind = start_ind - 1
+    # fix out of bound indicies:
+    if (end_ind < 0):
+        end_ind = 0
+        start_ind = 1
+    elif (end_ind >= num_points):
+        end_ind = num_points - 1
+        start_ind = num_points - 2
+    return line.axes.annotate('',
+        xytext=(xdata[start_ind], ydata[start_ind]),
+        xy=(xdata[end_ind], ydata[end_ind]),
+        arrowprops=dict(arrowstyle="->", color=color),
+        size=size
+    )
+
+
+
+
+
+@function_attributes(short_name=None, tags=['matplotlib', 'span', 'range-slider'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2025-02-21 05:25', related_items=[])
+def _plot_helper_add_span_where_ranges(pos_t: np.ndarray, pos_where_even_lap_indicies, pos_where_odd_lap_indicies, curr_ax: plt.axes, alpha=0.25, **span_where_kwargs):
+    """ Span_where implementation: Draws colored spans indicating the lap that is active during a given time interval. 
+    
+    Usage Example:
+        pos_df_is_nonNaN_lap = np.logical_not(np.isnan(pos_df.lap))
+        pos_df_is_even_lap = np.logical_and(pos_df_is_nonNaN_lap, (np.remainder(pos_df.lap, 2) == 0))
+        pos_df_is_odd_lap = np.logical_and(pos_df_is_nonNaN_lap, (np.remainder(pos_df.lap, 2) != 0))
+
+
+    ## TODO: general enough to factor out for REUSE?
+    """
+    curr_span_ymin = curr_ax.get_ylim()[0]
+    curr_span_ymax = curr_ax.get_ylim()[1]
+    collection = BrokenBarHCollection.span_where(
+        pos_t, ymin=curr_span_ymin, ymax=curr_span_ymax, where=pos_where_even_lap_indicies, facecolor='green', alpha=alpha, **span_where_kwargs)
+    curr_ax.add_collection(collection)
+    collection = BrokenBarHCollection.span_where(
+        pos_t, ymin=curr_span_ymin, ymax=curr_span_ymax, where=pos_where_odd_lap_indicies, facecolor='red', alpha=alpha, **span_where_kwargs)
+    curr_ax.add_collection(collection)
+    
+def _build_included_mask(mask_shape, crossing_beginings, crossing_endings):
+    """Builds a Boolean mask with mask_shape from the set of ranges
+
+    Args:
+        mask_shape ([type]): [description]
+        crossing_beginings ([numpy.ndarray]): [description]
+        crossing_endings ([numpy.ndarray]): [description]
+
+    Returns:
+        [type]: [description]
+
+    ## TODO: general enough to factor out for REUSE?
+    """
+    # included_mask = np.full_like(pos_df['x'], False)
+    included_mask = np.full(mask_shape, False) 
+    num_items = len(crossing_beginings)
+    # .astype(int)
+    
+    included_index_ranges = [np.arange(crossing_beginings[i], crossing_endings[i]) for i in np.arange(num_items)]
+    for aRange in included_index_ranges:
+        included_mask[aRange] = True
+    return included_mask, included_index_ranges
+
+def _plot_helper_render_laps(pos_t_rel_seconds, pos_value, crossing_beginings, crossing_midpoints, crossing_endings, color='y', include_highlight=False, ax=None, zorder:int=-5):
+    """ renders a set of estimated laps with the provided settings
+    Usage:
+        fig, out_axes_list = plot_position_curves_figure(position_obj, include_velocity=False, include_accel=False)
+        _plot_helper_render_lap(pos_df['t'].to_numpy(), pos_df['x'].to_numpy(), desc_crossing_beginings, desc_crossing_midpoints, desc_crossing_endings, color='r', ax=out_axes_list[0])
+        _plot_helper_render_lap(pos_df['t'].to_numpy(), pos_df['x'].to_numpy(), asc_crossing_beginings, asc_crossing_midpoints, asc_crossing_endings, color='g', ax=out_axes_list[0])
+        
+    Refactoring/TODO:
+        #TODO 2023-09-22 21:23: - [ ] I noticed that this seems to replicate a lot of the functionality of `neuropy.utils.matplotlib_helpers.draw_epoch_regions` which is more general I think. 
+    
+    """
+    # assert np.shape(pos_t_rel_seconds) == np.shape(crossing_beginings), f"pos_t_rel_seconds and crossing_beginings should be the same shape. Instead pos_t_rel_seconds is of size {np.shape(pos_t_rel_seconds)} and crossing_beginings is of size {np.shape(crossing_beginings)}."
+    assert np.shape(pos_t_rel_seconds)[0] >= np.max(crossing_beginings), f"crossing_beginings contains an index {np.max(crossing_beginings)} that is out of bounds for pos_t_rel_seconds with a size of {np.shape(pos_t_rel_seconds)}."
+    assert np.min(crossing_beginings) >= 0, f"crossing_beginings contains an index {np.min(crossing_beginings)} that is less than zero (and thus out of bounds for pos_t_rel_seconds with a size of {np.shape(pos_t_rel_seconds)})."
+    
+    if ax is None:
+        ax = plt.gca()
+    
+    # Plots the computed midpoint center-crossing for each lap. This is the basis of the calculation initially.
+    if crossing_midpoints is not None:
+        ax.scatter(pos_t_rel_seconds[crossing_midpoints], pos_value[crossing_midpoints], s=15, c=color, label='lap_crossing_midpoints', zorder=(zorder+1))
+    
+    # Plots the concrete vertical lines denoting the start/end of each lap
+    ax.vlines(pos_t_rel_seconds[crossing_beginings], 0, 1, transform=ax.get_xaxis_transform(), colors=color, label='lap_crossing_beginings', zorder=(zorder)) # index 57100 is out of bounds for axis 0 with size 51455 -> pos_t_rel_seconds has size 51455, and crossing_beginings is too long!
+    ax.vlines(pos_t_rel_seconds[crossing_endings], 0, 1, transform=ax.get_xaxis_transform(), colors=color, label='lap_crossing_endings', zorder=(zorder))
+    # Plot the ranges for the ascending and descending laps:
+    curr_included_mask, curr_included_index_ranges = _build_included_mask(np.shape(pos_value), crossing_beginings, crossing_endings)
+    collection = BrokenBarHCollection.span_where(pos_t_rel_seconds, ymin=0, ymax=1, transform=ax.get_xaxis_transform(), where=curr_included_mask, facecolor=color, alpha=0.35, label='lap_span_where', zorder=(zorder-1))
+    ax.add_collection(collection)
+    
+     # Add highlight/overlay
+    if include_highlight:
+        curr_highlight_indicies = np.where(curr_included_mask)[0]
+        ax.scatter(pos_t_rel_seconds[curr_highlight_indicies], pos_value[curr_highlight_indicies], s=0.5, c=color, label='lap_highlight', zorder=(zorder+2))
+        # ax.scatter(pos_t_rel_seconds[curr_included_mask], pos_value[curr_included_mask], s=0.5, c=color)
+
+
+from pyphoplacecellanalysis.General.Model.Configs.LongShortDisplayConfig import DisplayColorsEnum
+
+# ==================================================================================================================== #
+# MAIN FUNCTIONS                                                                                                       #
+# ==================================================================================================================== #
+
+@function_attributes(short_name=None, tags=['lap','trajectories','2D','matplotlib','plotting','paginated'], input_requires=[], output_provides=[],
+    uses=['plot_position_curves_figure','_plot_helper_add_span_where_ranges','_plot_helper_render_laps'], used_by=['estimation_session_laps'], creation_date='2023-05-09 05:13', related_items=[])
+def plot_laps_2d(sess, legacy_plotting_mode=True, **kwargs):
+    """ This generates a position/velocity/acceleration curve for the animal and highlights the currently recognized track epochs using green and red span overlays (corresponding to egress and ingress directions) 
+        TODO: currently legacy_plotting_mode=True does not function if the session has been filtered because the indicies no longer line up. 
+            I think that perhaps excluding invalid laps (filtering sess.laps just like the other session members) would prevent this issue, but partially out-of-bounds laps might also need to be dealt with.
+
+    Called by:
+        estimation_session_laps
+    """
+
+
+    # Passed 'even_lap_kwargs', 'odd_lap_kwargs' are to `_plot_helper_render_laps` when rendering the laps
+    default_even_lap_kwargs = dict(color=DisplayColorsEnum.Laps.RL, include_highlight=True) # a yellowish-green
+    default_odd_lap_kwargs = dict(color=DisplayColorsEnum.Laps.LR, include_highlight=True) # a purplish-royal-blue
+
+    pos_df = sess.compute_position_laps() # ensures the laps are computed if they need to be:
+    position_obj = sess.position
+    position_obj.compute_higher_order_derivatives()
+    pos_df = position_obj.compute_smoothed_position_info(N=20) ## Smooth the velocity curve to apply meaningful logic to it
+    pos_df = position_obj.to_dataframe()
+    
+    curr_laps_df = sess.laps.to_dataframe()
+    fig, out_axes_list = plot_position_curves_figure(position_obj, **(override_dict(dict(include_velocity=True, include_accel=False, figsize=(24, 10), axes_list=None), kwargs))) #include_velocity=True, include_accel=True, figsize=(24, 10))
+
+    ## Draw on top of the existing position curves with the lap colors:
+    if legacy_plotting_mode:
+        ## non-pre-filtered version, also doesn't create a duplicate dataframe:
+        pos_df_is_nonNaN_lap = np.logical_not(np.isnan(pos_df.lap))
+        pos_df_is_even_lap = np.logical_and(pos_df_is_nonNaN_lap, (np.remainder(pos_df.lap, 2) == 0))
+        pos_df_is_odd_lap = np.logical_and(pos_df_is_nonNaN_lap, (np.remainder(pos_df.lap, 2) != 0))
+        
+        curr_even_lap_dir_points = pos_df[pos_df_is_even_lap][['t','x']].to_numpy()
+        out_axes_list[0].scatter(curr_even_lap_dir_points[:,0], curr_even_lap_dir_points[:,1], s=0.5, c='g')
+        curr_odd_lap_dir_points = pos_df[pos_df_is_odd_lap][['t','x']].to_numpy()
+        out_axes_list[0].scatter(curr_odd_lap_dir_points[:,0], curr_odd_lap_dir_points[:,1], s=0.5, c='r')
+    
+
+    ## Draw the horizontal spans for each subplot:
+    # _plot_helper_add_span_where_ranges(pos_df.t.to_numpy(), pos_df_is_even_lap, pos_df_is_odd_lap, out_axes_list[0])
+    # _plot_helper_add_span_where_ranges(pos_df.t.to_numpy(), pos_df_is_even_lap, pos_df_is_odd_lap, out_axes_list[1])
+    # _plot_helper_add_span_where_ranges(pos_df.t.to_numpy(), pos_df_is_even_lap, pos_df_is_odd_lap, out_axes_list[2])
+    for an_axis in out_axes_list:
+        if legacy_plotting_mode:
+            span_where_kwargs = kwargs.pop('span_where_kwargs', {})
+            _plot_helper_add_span_where_ranges(pos_df.t.to_numpy(), pos_df_is_even_lap, pos_df_is_odd_lap, an_axis, **span_where_kwargs)
+        else:
+            _plot_helper_render_laps(pos_df['t'].to_numpy(), pos_df['x'].to_numpy(),
+                                curr_laps_df.loc[(curr_laps_df.lap_dir == 0), 'start_position_index'].to_numpy(),
+                                None, 
+                                curr_laps_df.loc[(curr_laps_df.lap_dir == 0),'end_position_index'].to_numpy(), **(default_even_lap_kwargs | kwargs.get('even_lap_kwargs', {})), ax=an_axis) # color='r', include_highlight=True
+
+            _plot_helper_render_laps(pos_df['t'].to_numpy(), pos_df['x'].to_numpy(),
+                                    curr_laps_df.loc[(curr_laps_df.lap_dir == 1), 'start_position_index'].to_numpy(),
+                                    None, 
+                                    curr_laps_df.loc[(curr_laps_df.lap_dir == 1),'end_position_index'].to_numpy(), **(default_odd_lap_kwargs | kwargs.get('odd_lap_kwargs', {})), ax=an_axis)
+            
+    
+    # _plot_helper_render_lap(pos_df['t'].to_numpy(), pos_df['x'].to_numpy(), desc_crossing_beginings, None, desc_crossing_endings, color='r', ax=out_axes_list[0])
+    # _plot_helper_render_lap(pos_df['t'].to_numpy(), pos_df['x'].to_numpy(), asc_crossing_beginings, None, asc_crossing_endings, color='g', ax=out_axes_list[0])
+    
+    out_axes_list[0].set_title('Laps')
+    fig.canvas.manager.set_window_title('Laps')
+    # fig.suptitle('Laps', fontsize=22)
+    return fig, out_axes_list
+
+
+#TODO 2026-02-05 18:13: - [ ] Note that there are general trajectory (not lap specific) versions at `plot_decoded_trajectories_2d`
+
+@function_attributes(short_name=None, tags=['lap','trajectories','3D','pyvista','qt','multiplotter','plotting','paginated'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2023-05-09 05:13', related_items=['plot_lap_trajectories_2d'])
+def plot_lap_trajectories_3d(sess, curr_num_subplots=1, active_page_index=0, included_lap_idxs=None, maximum_fixed_columns:int=5, single_combined_plot=True, lap_start_z = 0.0, lap_id_dependent_z_offset = 1.0, plot_stacked_arena_guides=False, existing_plotter=None, debug_print=False, **kwargs):
+    """ Plots a PyVista Qt Multiplotter with either:
+        1. several overhead 3D views, each showing a specific lap over the maze in one of its subplots
+        2. a single 3D view with all of the laps displayed in a vertical stack
+        
+    Inputs:
+        single_combined_plot: bool - determines whether the laps are plotted on a single 3D view (1.) or multiple subplots (2.)
+        single_combined_plot == True only:
+            lap_id_dependent_z_offset: only relevant when single_combined_plot is True. a float indicating how far each lap is offset in the z direction from the previous
+            plot_stacked_arena_guides: only relevant when single_combined_plot is True. If True, plots multiple vertically stacked arenas (arena == track/maze) for visual reference of where the lap is in the arena.
+        single_combined_plot == False only:
+            curr_num_subplots=1
+            active_page_index=0
+            maximum_fixed_columns:int=5 - the maximum number of columns to render subplots in (will wrap)
+        Both modes:
+            existing_plotter=None
+            debug_print=False
+
+
+    Usage: 
+        from pyphoplacecellanalysis.PhoPositionalData.plotting.laps import plot_lap_trajectories_3d
+        ## single_combined_plot == True mode (mode 1.):
+        p, laps_pages = plot_lap_trajectories_3d(curr_active_pipeline.sess, single_combined_plot=True)
+        p.show()
+
+        ## single_combined_plot == False mode (mode 2.):        
+        p, laps_pages = plot_lap_trajectories_3d(curr_active_pipeline.sess, single_combined_plot=False, curr_num_subplots=len(curr_active_pipeline.sess.laps.lap_id), active_page_index=1)
+        p.show()
+        
+        
+    Usage 2:
+
+        from pyphoplacecellanalysis.GUI.PyVista.InteractivePlotter.Mixins.LapsVisualizationMixin import LapsVisualizationMixin
+        from pyphoplacecellanalysis.PhoPositionalData.plotting.laps import plot_lap_trajectories_3d
+
+        ## single_combined_plot == True mode (mode 1.):
+        p, laps_pages = plot_lap_trajectories_3d(a_sess, single_combined_plot=True, color_by_speed=True)
+        p.show()
+
+    """
+    def _chunks(iterable, size=10):
+        iterator = iter(iterable)
+        for first in iterator:    # stops when iterator is depleted
+            def chunk():          # construct generator for next chunk
+                yield first       # yield element from for loop
+                for more in islice(iterator, size - 1):
+                    yield more    # yield more elements from the iterator
+            yield chunk()         # in outer generator, yield next chunk
+
+        
+    def _build_epochs_multiplotter(nfields, single_combined_plot: bool, linear_plot_data=None, maximum_fixed_columns:int=5, debug_print=True):
+        """ builds the appropriate multiplotter """
+        linear_plotter_indicies = np.arange(nfields)
+        fixed_columns = min(maximum_fixed_columns, nfields)
+        needed_rows = int(np.ceil(nfields / fixed_columns))
+        row_column_indicies = np.unravel_index(linear_plotter_indicies, (needed_rows, fixed_columns)) # inverse is: np.ravel_multi_index(row_column_indicies, (needed_rows, fixed_columns))
+        
+        if existing_plotter is None:
+            if debug_print:
+                print('creating new pvqt.MultiPlotter')
+            mp = pvqt.MultiPlotter(nrows=needed_rows, ncols=fixed_columns, show=False, title='Laps Muliplotter', toolbar=False, menu_bar=False, editor=False)
+        else:
+            if isinstance(existing_plotter, pvqt.MultiPlotter):
+                if debug_print:
+                    print('reusing extant existing_plotter (pvqt.MultiPlotter)')
+                mp = existing_plotter
+            elif isinstance(existing_plotter, pvqt.BackgroundPlotter):
+                if debug_print:
+                    print('reusing extant existing_plotter (pvqt.BackgroundPlotter)')
+                print('ERROR: extant_plotter must be a MultiPlotter type!')
+                raise ValueError
+            else:
+                print(f'ERROR: existing_plotter is of unknown type {type(existing_plotter)}')
+                raise ValueError
+            
+        # print('linear_plotter_indicies: {}\n row_column_indicies: {}\n'.format(linear_plotter_indicies, row_column_indicies))
+        for a_linear_index in linear_plotter_indicies:
+            # print('a_linear_index: {}, row_column_indicies[0][a_linear_index]: {}, row_column_indicies[1][a_linear_index]: {}'.format(a_linear_index, row_column_indicies[0][a_linear_index], row_column_indicies[1][a_linear_index]))
+            curr_row = row_column_indicies[0][a_linear_index]
+            curr_col = row_column_indicies[1][a_linear_index]
+            if linear_plot_data is None:
+                mp[curr_row, curr_col].add_mesh(pv.Sphere())
+            else:
+                if single_combined_plot:
+                    perform_plot_flat_arena(mp[curr_row, curr_col], linear_plot_data[0], linear_plot_data[1], z=-0.01, name='maze_bg', render=False)
+                else:
+                    # mp[curr_row, curr_col].add_mesh(linear_plot_data[a_linear_index], name='maze_bg', color="black", render=False)
+                    perform_plot_flat_arena(mp[curr_row, curr_col], linear_plot_data[a_linear_index], z=-0.01, name='maze_bg', render=False)
+
+            # Setup default camera to overhead view:
+            
+            mp[curr_row, curr_col].set_background('black') #.set_background('black', top='white')
+            # mp[curr_row, curr_col].camera.tight()
+            mp[curr_row, curr_col].camera_position = 'xy' # set to overhead view
+            # mp[curr_row, curr_col].camera.elevation = 10 # set elevation of camera (distance from maze)
+
+        return mp, linear_plotter_indicies, row_column_indicies
+
+    
+    def _add_specific_epoch_trajectory(p, linear_plotter_indicies, row_column_indicies, active_page_laps_ids, curr_lap_position_traces, curr_lap_time_range, single_combined_plot: bool, lap_start_z: float, lap_id_dependent_z_offset: float):
+        """ captures kwargs
+        """
+        # Add the lap trajectory:
+        for a_linear_index in linear_plotter_indicies:
+            curr_row = row_column_indicies[0][a_linear_index]
+            curr_col = row_column_indicies[1][a_linear_index]
+            if single_combined_plot:
+                # curr_lap_id = active_page_laps_ids[a_linear_index]
+                # print(f'curr_lap_id: {curr_lap_id}')
+                for curr_lap_idx, curr_lap_id in enumerate(active_page_laps_ids):
+                    LapsVisualizationMixin.plot_lap_trajectory_path_spline(p[curr_row, curr_col], curr_lap_position_traces[curr_lap_idx], curr_lap_id, 
+                                                                           lap_start_z=lap_start_z, lap_id_dependent_z_offset=lap_id_dependent_z_offset, **kwargs)
+                    # curr_lap_label_text = 'Lap[{}]: t({:.2f}, {:.2f})'.format(curr_lap_id, curr_lap_time_range[curr_lap_id][0], curr_lap_time_range[curr_lap_id][1]) 
+                    # PhoWidgetHelper.perform_add_text(p[curr_row, curr_col], curr_lap_label_text, name='lblLapIdIndicator')
+            else:
+                curr_lap_id = active_page_laps_ids[a_linear_index]
+                LapsVisualizationMixin.plot_lap_trajectory_path_spline(p[curr_row, curr_col], curr_lap_position_traces[curr_lap_id], a_linear_index, **kwargs)
+                curr_lap_label_text = 'Lap[{}]: t({:.2f}, {:.2f})'.format(curr_lap_id, curr_lap_time_range[curr_lap_id][0], curr_lap_time_range[curr_lap_id][1]) 
+                PhoWidgetHelper.perform_add_text(p[curr_row, curr_col], curr_lap_label_text, name='lblLapIdIndicator')
+
+    # Compute required data from session:
+    curr_position_df, lap_specific_position_dfs, lap_specific_time_ranges, lap_specific_position_traces = LapsVisualizationMixin._compute_laps_position_data(sess)
+    all_maze_positions = curr_position_df[['x','y']].to_numpy().T # (2, 59308)
+
+    if single_combined_plot:
+        curr_num_subplots = 1 # Only one subplot and the correct page index make sense for single_combined_plot mode 
+        active_page_index = 0
+        all_maze_data = (all_maze_positions[0,:], all_maze_positions[1,:])
+    else:
+        pdata_maze_shared, pc_maze_shared = _build_flat_arena_data(all_maze_positions[0,:], all_maze_positions[1,:], smoothing=False)
+        all_maze_data = np.full((curr_num_subplots,), pc_maze_shared) # repeat the maze data for each subplot
+
+    p, linear_plotter_indicies, row_column_indicies = _build_epochs_multiplotter(curr_num_subplots, single_combined_plot, all_maze_data, maximum_fixed_columns=maximum_fixed_columns, debug_print=debug_print)
+    
+    if included_lap_idxs is None:
+        included_lap_idxs = np.arange(len(sess.laps.lap_id)) # all lap indicies are included by default
+    else:
+        included_lap_idxs = np.array(included_lap_idxs)
+        
+    # get the lap IDs from the included_lap_idxs
+    included_lap_IDs = sess.laps.lap_id[included_lap_idxs]
+    # ensure that only lap_ids included in this session are used:
+    
+    if 'lap' not in sess.spikes_df.columns:
+        spikes_df = sess.spikes_df.spikes.adding_lap_identity_column(laps_epoch_df=sess.laps.to_dataframe(), epoch_id_key_name='lap')
+
+    possible_included_lap_ids = np.unique(sess.spikes_df.lap.values)
+    is_lap_id_possible = np.isin(included_lap_IDs, possible_included_lap_ids)
+    if debug_print:
+        print(f'np.unique(sess.spikes_df.lap.values): {np.unique(sess.spikes_df.lap.values)}')
+    included_lap_IDs = included_lap_IDs[is_lap_id_possible]
+    if debug_print:
+        print(f'included_lap_ids: {included_lap_IDs}')
+    assert len(included_lap_IDs) > 0, "After ensuring only valid lap IDs were included, none remain!"
+    included_lap_idxs = included_lap_idxs[is_lap_id_possible] # also filter the included_lap_idxs to match the included IDs
+            
+    # filter to only include the included laps in the data
+    lap_specific_time_ranges = [lap_specific_time_ranges[i] for i in included_lap_idxs]
+    lap_specific_position_traces = [lap_specific_position_traces[i] for i in included_lap_idxs]
+    
+        
+        
+    # generate the pages
+    if single_combined_plot:
+        laps_pages = [list(included_lap_IDs)] # single 'page'
+    else:
+        laps_pages = [list(chunk) for chunk in _chunks(included_lap_IDs, curr_num_subplots)]
+    active_page_laps_ids = laps_pages[active_page_index]
+    # print(f'active_page_laps_ids: {active_page_laps_ids}, curr_lap_position_traces: {curr_lap_position_traces}')
+    if plot_stacked_arena_guides:
+        if single_combined_plot:
+            # pdata_maze_shared, pc_maze_shared = _build_flat_arena_data(all_maze_data[0], all_maze_data[1])
+            # all_maze_data = np.full((curr_num_subplots,), pc_maze_shared) # repeat the maze data for each subplot
+            for curr_lap_idx, curr_lap_id in enumerate(active_page_laps_ids):
+                curr_maze_z_offset = -0.01 + (lap_id_dependent_z_offset * (curr_lap_idx + 1))
+                perform_plot_flat_arena(p[0,0], all_maze_data[0], all_maze_data[1], z=curr_maze_z_offset, name=f'maze_offset[{curr_lap_idx}]', render=False, color=[0.1, 0.1, 0.1, 1.0], smoothing=False, extrude_height=-2, opacity=0.5)
+
+    # add the laps
+    _add_specific_epoch_trajectory(p, linear_plotter_indicies, row_column_indicies, active_page_laps_ids, lap_specific_position_traces, lap_specific_time_ranges, single_combined_plot=single_combined_plot, lap_start_z=lap_start_z, lap_id_dependent_z_offset=lap_id_dependent_z_offset)
+    
+    ## Set title:
+    
+    
+    return p, laps_pages
+
+@function_attributes(short_name=None, tags=['lap','trajectories','2D','matplotlib','plotting','paginated'], input_requires=[], output_provides=[], uses=['_plot_helper_add_arrow'], used_by=[], creation_date='2023-05-09 05:13', related_items=['plot_decoded_trajectories_2d', 'plot_lap_trajectories_3d'])
+def plot_lap_trajectories_2d(sess, curr_num_subplots=5, active_page_index=0, fixed_columns = 2, fig_size_inches=(18.5, 26.5), use_time_gradient_line=True, arrow_concentration_kwargs=None, debug_print=False):
+    """ Plots a MatplotLib 2D Figure with each lap being shown in one of its subplots
+     
+    Great plotting for laps.
+    Plots in a paginated manner.
+    
+    Usage:
+        from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.ContainerBased.PhoContainerTool import GenericMatplotlibContainer
+        from pyphoplacecellanalysis.PhoPositionalData.plotting.laps import plot_lap_trajectories_2d
+
+        out3: GenericMatplotlibContainer = plot_lap_trajectories_2d(a_sess, curr_num_subplots=20, active_page_index=0, fixed_columns = 4, use_time_gradient_line=False)
+        p3, axs, laps_pages3 = out3.fig, out3.axes, out3.plots_data.laps_pages ## unpack like
+
+        
+
+    Usage Full:
+
+        arrow_concentration_kwargs = dict(
+            arrow_skip = 50, time_cmap='viridis',
+            mutation_scale_multiplier = 20, mutation_scale_constant = 1,
+            arrow_length_multiplier = 0.05, arrow_length_constant = 0.01,
+            arrow_lw = 0.5,
+        )
+
+        plot_lap_trajectories_2d_kwargs = dict(
+            curr_num_subplots=(6*5), active_page_index=0, fixed_columns = 6,
+        )
+
+        out3: GenericMatplotlibContainer = plot_lap_trajectories_2d(a_sess, **plot_lap_trajectories_2d_kwargs, use_time_gradient_line=True, arrow_concentration_kwargs=arrow_concentration_kwargs)
+        p3, axs, laps_pages3 = out3.fig, out3.axes, out3.plots_data.laps_pages
+        p3
+
+
+    """    
+    from pyphoplacecellanalysis.PhoPositionalData.plotting.mixins.decoder_plotting_mixins import DecodedTrajectoryMatplotlibPlotter, RenderColoringMode
+    from neuropy.utils.matplotlib_helpers import perform_update_title_subtitle
+    
+    arrow_concentration_kwargs = dict(
+        arrow_skip = 50, time_cmap='viridis',
+        mutation_scale_multiplier = 20, mutation_scale_constant = 1, arrow_length_multiplier = 0.2, arrow_length_constant = 0.05, arrow_lw = 0.5,
+    ) | (arrow_concentration_kwargs or {})
+    print(f'arrow_concentration_kwargs: {arrow_concentration_kwargs}')
+
+    def _subfn_chunks(iterable, size=10):
+        iterator = iter(iterable)
+        for first in iterator:    # stops when iterator is depleted
+            def chunk():          # construct generator for next chunk
+                yield first       # yield element from for loop
+                for more in islice(iterator, size - 1):
+                    yield more    # yield more elements from the iterator
+            yield chunk()         # in outer generator, yield next chunk
+        
+
+    def _subfn_build_epochs_multiplotter(nfields, linear_plot_data=None):
+        """ captures: fixed_columns
+        """
+        linear_plotter_indicies = np.arange(nfields)
+        needed_rows = int(np.ceil(nfields / fixed_columns))
+        row_column_indicies = np.unravel_index(linear_plotter_indicies, (needed_rows, fixed_columns)) # inverse is: np.ravel_multi_index(row_column_indicies, (needed_rows, fixed_columns))
+        mp, axs = plt.subplots(needed_rows, fixed_columns, sharex=True, sharey=True) #ndarray (5,2)
+        if fig_size_inches is not None:
+            mp.set_size_inches(fig_size_inches[0], fig_size_inches[1])
+        for a_linear_index in linear_plotter_indicies:
+            curr_row = row_column_indicies[0][a_linear_index]
+            curr_col = row_column_indicies[1][a_linear_index]
+            axs[curr_row][curr_col].plot(linear_plot_data[a_linear_index][0,:], linear_plot_data[a_linear_index][1,:], c='k', alpha=0.2)
+
+        ## SEt figure/window title            
+        perform_update_title_subtitle(fig=mp, ax=None, title_string="plot_lap_trajectories_2d") # , subtitle_string="TEST - SUBTITLE"
+        
+        return mp, axs, linear_plotter_indicies, row_column_indicies
+    
+
+    def _subfn_add_specific_epoch_trajectory(p, axs, linear_plotter_indicies, row_column_indicies, active_page_epochs_ids, epochs_position_traces, epoch_time_ranges, use_time_gradient_line: bool=True):
+        # Add the lap trajectory:
+        _out_objs = {'line_artists': {}, 'line_markers': {}}
+        if use_time_gradient_line:
+            _out_objs['line_collections'] = {}
+            
+        for a_linear_index in linear_plotter_indicies:
+            curr_epoch_id = active_page_epochs_ids[a_linear_index]
+            curr_row = row_column_indicies[0][a_linear_index]
+            curr_col = row_column_indicies[1][a_linear_index]
+            curr_lap_time_range = epoch_time_ranges[curr_epoch_id]
+            curr_lap_label_text = 'Lap[{}]: t({:.2f}, {:.2f})'.format(curr_epoch_id, curr_lap_time_range[0], curr_lap_time_range[1])
+            curr_lap_num_points = len(epochs_position_traces[curr_epoch_id][0,:])
+            
+            _out_objs['line_markers'][a_linear_index] = {}
+            if use_time_gradient_line:
+                # Create a continuous norm to map from data points to colors
+                curr_lap_timeseries = np.linspace(curr_lap_time_range[0], curr_lap_time_range[-1], len(epochs_position_traces[curr_epoch_id][0,:]))
+                # norm = plt.Normalize(curr_lap_timeseries.min(), curr_lap_timeseries.max())
+
+                # line, _out_markers = DecodedTrajectoryMatplotlibPlotter._helper_add_gradient_line(ax=axs[curr_row][curr_col], 
+                #     t=curr_lap_timeseries, # np.linspace(curr_lap_time_range[0], curr_lap_time_range[-1], len(laps_position_traces[curr_lap_id][0,:]))
+                #     x=epochs_position_traces[curr_epoch_id][0,:],
+                #     y=epochs_position_traces[curr_epoch_id][1,:], add_markers=False, time_cmap='viridis', #norm=norm,
+                # )
+
+
+                line, _out_markers = DecodedTrajectoryMatplotlibPlotter._helper_add_gradient_line(ax=axs[curr_row][curr_col], 
+                    t=curr_lap_timeseries, # np.linspace(curr_lap_time_range[0], curr_lap_time_range[-1], len(laps_position_traces[curr_lap_id][0,:]))
+                    x=epochs_position_traces[curr_epoch_id][0,:],
+                    y=epochs_position_traces[curr_epoch_id][1,:], add_markers=False, 
+                    line_color_scheme=RenderColoringMode.ANGLE,
+                    # time_cmap='viridis', #norm=norm,
+                )
+
+
+                # line, _out_markers = DecodedTrajectoryMatplotlibPlotter._helper_add_gradient_angle_visualizing_line(ax=axs[curr_row][curr_col], 
+                #     t=curr_lap_timeseries, # np.linspace(curr_lap_time_range[0], curr_lap_time_range[-1], len(laps_position_traces[curr_lap_id][0,:]))
+                #     x=epochs_position_traces[curr_epoch_id][0,:],
+                #     y=epochs_position_traces[curr_epoch_id][1,:], add_markers=False, #norm=norm,
+                # )
+
+
+                _out_markers = DecodedTrajectoryMatplotlibPlotter._helper_add_concentrated_arrows_to_line(ax=axs[curr_row][curr_col], 
+                    t=curr_lap_timeseries, # np.linspace(curr_lap_time_range[0], curr_lap_time_range[-1], len(laps_position_traces[curr_lap_id][0,:]))
+                    x=epochs_position_traces[curr_epoch_id][0,:],
+                    y=epochs_position_traces[curr_epoch_id][1,:], 
+                    speed=None,
+                    arrow_color_scheme=RenderColoringMode.ANGLE,
+                    **arrow_concentration_kwargs
+                )
+
+                # # needs to be (numlines) x (points per line) x 2 (for x and y)
+                # points = np.array([laps_position_traces[curr_lap_id][0,:], laps_position_traces[curr_lap_id][1,:]]).T.reshape(-1, 1, 2)
+                # segments = np.concatenate([points[:-1], points[1:]], axis=1)
+                # lc = LineCollection(segments, cmap='viridis', norm=norm)
+                # # Set the values used for colormapping
+                # lc.set_array(curr_lap_timeseries)
+                # lc.set_linewidth(2)
+                # lc.set_alpha(0.85)
+                # line = axs[curr_row][curr_col].add_collection(lc)
+                # add_arrow(line)
+                # _out_objs['line_collections'][a_linear_index] = lc
+                _out_objs['line_artists'][a_linear_index] = line
+                _out_objs['line_markers'][a_linear_index] = _out_markers
+
+                # ## Add overlay arrows/markers:    
+                # _out_objs['line_markers'][a_linear_index]['start'] = _plot_helper_add_arrow(line, position=0, position_mode='index', direction='right', size=20, color='green') # start
+                # _out_objs['line_markers'][a_linear_index]['middle'] = _plot_helper_add_arrow(line, position=None, position_mode='index', direction='right', size=20, color='yellow') # middle
+                # _out_objs['line_markers'][a_linear_index]['end'] = _plot_helper_add_arrow(line, position=curr_lap_num_points, position_mode='index', direction='right', size=20, color='red') # end
+                
+            else:
+                line = axs[curr_row][curr_col].plot(epochs_position_traces[curr_epoch_id][0,:], epochs_position_traces[curr_epoch_id][1,:], c='k', alpha=0.85)
+                # curr_lap_endpoint = curr_lap_position_traces[curr_lap_id][:,-1].T
+                _out_objs['line_markers'][a_linear_index]['start'] = _plot_helper_add_arrow(line[0], position=0, position_mode='index', direction='right', size=20, color='green') # start
+                _out_objs['line_markers'][a_linear_index]['middle'] = _plot_helper_add_arrow(line[0], position=None, position_mode='index', direction='right', size=20, color='yellow') # middle
+                _out_objs['line_markers'][a_linear_index]['end'] = _plot_helper_add_arrow(line[0], position=curr_lap_num_points, position_mode='index', direction='right', size=20, color='red') # end
+                # add_arrow(line[0], position=curr_lap_endpoint, position_mode='abs', direction='right', size=50, color='blue')
+                # add_arrow(line[0], position=None, position_mode='rel', direction='right', size=50, color='blue')
+                _out_objs['line_artists'][a_linear_index] = line
+                
+
+            # add lap text label (title above axes, left-aligned)
+            axs[curr_row][curr_col].set_title(curr_lap_label_text, fontsize=10, loc='left')
+
+
+        ## END for a_linear_index in linear_plotter_indicies...
+        return _out_objs
+
+
+    # BEGIN FUNCTION BODY ________________________________________________________________________________________________ #
+
+    # Compute required data from session:
+    curr_position_df, epoch_specific_position_dfs = LapsVisualizationMixin._compute_laps_specific_position_dfs(sess)
+    epochs_position_traces_list = [epoch_pos_df[['x','y']].to_numpy().T for epoch_pos_df in epoch_specific_position_dfs]
+    epochs_time_range_list = [[epoch_pos_df[['t']].to_numpy()[0].item(), epoch_pos_df[['t']].to_numpy()[-1].item()] for epoch_pos_df in epoch_specific_position_dfs]
+    epoch_ids = deepcopy(sess.laps.lap_id)
+    n_epochs: int = len(epoch_ids)
+    ## OUTPUTS: epoch_ids, epochs_time_range_list, epochs_position_traces_list, curr_position_df
+
+    curr_num_subplots = min(curr_num_subplots, n_epochs) # if there are fewer epochs than subplots, reduce the number of subplots
+
+    ## INPUTS: epoch_ids, epochs_time_range_list, epochs_position_traces_list, curr_position_df
+    # num_laps = len(epoch_ids)
+    # linear_lap_index = np.arange(num_laps)
+    epochs_time_ranges = dict(zip(epoch_ids, epochs_time_range_list))
+    epochs_position_traces = dict(zip(epoch_ids, epochs_position_traces_list))
+    
+    all_maze_positions = curr_position_df[['x','y']].to_numpy().T # (2, 59308)
+    # np.shape(all_maze_positions)
+    all_maze_data = [all_maze_positions for i in  np.arange(curr_num_subplots)] # repeat the maze data for each subplot. (2, 593080)
+    p, axs, linear_plotter_indicies, row_column_indicies = _subfn_build_epochs_multiplotter(curr_num_subplots, all_maze_data)
+    # generate the pages
+    epochs_pages = [list(chunk) for chunk in _subfn_chunks(epoch_ids, curr_num_subplots)]
+    active_page_epochs_ids = epochs_pages[active_page_index]
+    _out_objs = _subfn_add_specific_epoch_trajectory(p, axs, linear_plotter_indicies, row_column_indicies, active_page_epochs_ids, epochs_position_traces, epochs_time_ranges, use_time_gradient_line=use_time_gradient_line)
+    # plt.ylim((125, 152))
+    
+    # return p, axs, laps_pages, _out_objs
+    return GenericMatplotlibContainer.init_from_matplotlib_objects(name='plot_lap_trajectories_2d', figures=[p], axes=axs, context=None, plots={'artists': _out_objs}, plots_data={'laps_pages': epochs_pages})
+    # return MatplotlibRenderPlots(name='plot_lap_trajectories_2d', figures=[p], axes=axs, context=None, plot_data={'laps_pages': laps_pages, 'artists': _out_objs})
+
+
+@function_attributes(short_name=None, tags=['lap','trajectories','3D','napari','plotting','stack'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2025-10-21 00:00', related_items=['plot_lap_trajectories_3d'])
+def plot_lap_trajectories_3d_napari(sess, included_lap_idxs=None, lap_start_z=0.0, lap_id_dependent_z_offset=1.0, existing_viewer=None, show=True, debug_print=False):
+    """Renders a Napari 3D viewer with a stacked set of lap trajectories as a Tracks layer.
+
+    Each lap trajectory is offset along Z by lap_id_dependent_z_offset to form a vertical stack.
+
+    Returns: (viewer, tracks_layer, included_lap_ids)
+
+    Usage:
+        from pyphoplacecellanalysis.PhoPositionalData.plotting.laps import plot_lap_trajectories_3d_napari
+        viewer, layer, lap_ids = plot_lap_trajectories_3d_napari(curr_active_pipeline.sess, lap_id_dependent_z_offset=1.0)
+        # viewer will be shown if show=True
+    """
+    # Local import to avoid altering global imports
+    try:
+        import napari
+    except Exception as e:
+        raise ImportError("Napari is required for plot_lap_trajectories_3d_napari") from e
+
+    # Compute per-lap position data
+    curr_position_df, lap_specific_position_dfs = LapsVisualizationMixin._compute_laps_specific_position_dfs(sess)
+
+    # Determine which laps to include
+    if included_lap_idxs is None:
+        included_lap_idxs = np.arange(len(sess.laps.lap_id))
+    else:
+        included_lap_idxs = np.array(included_lap_idxs)
+
+    included_lap_IDs = sess.laps.lap_id[included_lap_idxs]
+
+    # Ensure laps exist in spikes_df if available (mirrors 3D pyvista function)
+    if hasattr(sess, 'spikes_df') and (sess.spikes_df is not None):
+        if 'lap' not in sess.spikes_df.columns:
+            _ = sess.spikes_df.spikes.adding_lap_identity_column(laps_epoch_df=sess.laps.to_dataframe(), epoch_id_key_name='lap')
+        possible_included_lap_ids = np.unique(sess.spikes_df.lap.values)
+        is_lap_id_possible = np.isin(included_lap_IDs, possible_included_lap_ids)
+        included_lap_IDs = included_lap_IDs[is_lap_id_possible]
+        included_lap_idxs = included_lap_idxs[is_lap_id_possible]
+
+    assert len(included_lap_IDs) > 0, "No valid lap IDs to render."
+
+    # Build Tracks layer data: columns = [track_id, t, z, y, x]
+    tracks_rows = []
+    for stack_idx, lap_idx in enumerate(included_lap_idxs):
+        lap_id = sess.laps.lap_id[lap_idx]
+        lap_df = lap_specific_position_dfs[lap_idx]
+        # Use true time for ordering if available
+        t_vals = lap_df['t'].to_numpy()
+        x_vals = lap_df['x'].to_numpy()
+        y_vals = lap_df['y'].to_numpy()
+        # Constant Z offset per lap to stack
+        z_offset = lap_start_z + (lap_id_dependent_z_offset * float(stack_idx))
+        if debug_print:
+            print(f"Lap {lap_id}: {len(t_vals)} points, z={z_offset}")
+        # Assemble rows for this lap
+        # Napari expects float IDs; ensure safe casting for large ints
+        track_id_val = int(lap_id)
+        track_rows = np.column_stack([
+            np.full_like(t_vals, track_id_val, dtype=int),  # track_id
+            t_vals.astype(float),                              # time
+            np.full_like(t_vals, z_offset, dtype=float),       # z
+            y_vals.astype(float),                              # y
+            x_vals.astype(float)                               # x
+        ])
+        tracks_rows.append(track_rows)
+
+    tracks_data = np.vstack(tracks_rows)
+
+    # Create or reuse viewer
+    viewer = existing_viewer if existing_viewer is not None else napari.Viewer(ndisplay=3)
+
+    # Add Tracks layer; color by track_id for per-lap colors
+    properties = {
+        'track_id': tracks_data[:, 0].astype(int)
+    }
+    tracks_layer = viewer.add_tracks(
+        tracks_data,
+        properties=properties,
+        name='lap_trajectories',
+        tail_length=0,
+        colormap='turbo',
+        color_by='track_id',
+        blending='translucent'
+    )
+
+    # Basic 3D view tweaks
+    try:
+        viewer.axes.visible = True
+        viewer.camera.center = (0.0, 0.0, 0.0)
+    except Exception:
+        pass
+
+    if show and existing_viewer is None:
+        napari.run()
+
+    return viewer, tracks_layer, list(included_lap_IDs)

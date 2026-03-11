@@ -1,0 +1,1805 @@
+from __future__ import annotations # prevents having to specify types for typehinting as strings
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    ## typehinting only imports here
+    from pyphoplacecellanalysis.PhoPositionalData.plotting.mixins.epochs_plotting_mixins import EpochDisplayConfig
+    
+
+from copy import copy, deepcopy
+from neuropy.core import Epoch
+from pyphocorehelpers.function_helpers import function_attributes
+import numpy as np
+import pandas as pd
+
+from qtpy import QtCore
+
+from typing import Dict, List, Tuple, Optional, Callable, Union, Any
+import nptyping as ND
+from nptyping import NDArray
+
+from pyphocorehelpers.print_helpers import SimplePrintable, PrettyPrintable, iPythonKeyCompletingMixin
+from pyphocorehelpers.DataStructure.dynamic_parameters import DynamicParameters
+from neuropy.utils.misc import split_list_of_dicts
+from neuropy.utils.indexing_helpers import PandasHelpers
+
+from pyphocorehelpers.DataStructure.general_parameter_containers import DebugHelper, VisualizationParameters, RenderPlots, RenderPlotsData
+from pyphocorehelpers.gui.PhoUIContainer import PhoUIContainer
+from pyphocorehelpers.gui.Qt.connections_container import ConnectionsContainer
+from pyphocorehelpers.programming_helpers import metadata_attributes
+from pyphocorehelpers.function_helpers import function_attributes
+
+from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.GraphicsObjects.IntervalRectsItem import IntervalRectsItem
+from pyphocorehelpers.gui.Qt.color_helpers import ColorDataframeColumnHelpers, ColorFormatConverter, QColorColumnsAccessor # replacing `RectangleRenderTupleHelpers`
+from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.Mixins.RenderTimeEpochs.Render2DEventRectanglesHelper import Render2DEventRectanglesHelper
+
+from pyphoplacecellanalysis.General.Model.Datasources.IntervalDatasource import IntervalsDatasource
+from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.Mixins.RenderTimeEpochs.Specific2DRenderTimeEpochs import General2DRenderTimeEpochs # required for `update_interval_visualization_properties(...)`
+from pyphocorehelpers.gui.Qt.ExceptionPrintingSlot import pyqtExceptionPrintingSlot
+from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.Mixins.ReprPrintableWidgetMixin import ReprPrintableItemMixin
+
+
+from enum import Enum, auto
+
+class AddedEpochPositionNormalizationMode(Enum):
+    """How the epoch or epochs to be added are positioned when adding."""
+    ABSOLUTE = auto() # the specified positions/heights are absolute and no auto normalization will be performed (compatibility)
+    ADD_HEIGHT = auto() # height will be added to the overall portion of each plot dedicated to display the intervals so that the new intervals fit
+    SCALE_HEIGHT = auto() # height will remain unchanged after adding the new intervals, such that the height of previous intervals will be reduced to prevent overlaps
+
+    def __str__(self):
+        return self.name
+
+    @classmethod
+    def list_values(cls):
+        """Returns a list of all enum values"""
+        return list(cls)
+
+    @classmethod
+    def list_names(cls):
+        """Returns a list of all enum names"""
+        return [e.name for e in cls]
+
+
+
+class RenderedEpochsItemsContainer(iPythonKeyCompletingMixin, DynamicParameters):
+    """ Wraps a list of plots and their rendered_rects_item for a given datasource/name
+    
+        Note that the plots are only given by self.dynamically_added_attributes since the 'name' key exists.
+    
+    """
+    def __init__(self, rendered_rects_item: IntervalRectsItem, target_plots_list: List, **kwargs):
+        super(RenderedEpochsItemsContainer, self).__init__()
+        if len(target_plots_list) == 1:
+            a_plot = target_plots_list[0]
+            self[a_plot] = rendered_rects_item # no conflict, so can just return the original rendered_rects_item
+
+        else:
+            for a_plot in target_plots_list:
+                # make an independent copy of the rendered_rects_item for each plot
+                independent_data_copy = ColorDataframeColumnHelpers.copy_data(rendered_rects_item.data)
+                self[a_plot] = IntervalRectsItem(data=independent_data_copy, **kwargs)
+                ## Copy tooltip function
+                if rendered_rects_item.format_item_tooltip_fn is not None:
+                    self[a_plot].format_item_tooltip_fn = deepcopy(rendered_rects_item.format_item_tooltip_fn)
+
+
+
+@metadata_attributes(short_name=None, tags=['live-window', 'intervals'], input_requires=[], output_provides=[], uses=[], used_by=['EpochRenderingMixin'], creation_date='2025-01-06 15:09', related_items=[])
+class LiveWindowEventIntervalMonitoringMixin(ReprPrintableItemMixin):
+    """ Implementors recieve signals when the live viewport window changes, indicating that one of their items is entering/exciting the viewport
+    
+    sets:
+        self._active_window_visible_intervals_dict
+        
+    Implementors must:
+        self.LiveWindowEventIntervalMonitoringMixin_on_window_update(new_start, new_end)
+    """
+    sigOnIntervalEnteredWindow = QtCore.Signal(object) # pyqtSignal(object)
+    # sigOnIntervalInWindow = None
+    sigOnIntervalExitedindow = QtCore.Signal(object)
+    
+    @pyqtExceptionPrintingSlot()
+    def LiveWindowEventIntervalMonitoringMixin_on_init(self):
+        """ perform any parameters setting/checking during init """
+        self._active_window_visible_intervals_dict = {}
+        self._enable_live_window_event_interval_monitoring = False
+
+    @pyqtExceptionPrintingSlot()
+    def LiveWindowEventIntervalMonitoringMixin_on_setup(self):
+        """ perfrom setup/creation of widget/graphical/data objects. Only the core objects are expected to exist on the implementor (root widget, etc) """
+        pass
+
+
+    @pyqtExceptionPrintingSlot()
+    def LiveWindowEventIntervalMonitoringMixin_on_buildUI(self):
+        """ perfrom setup/creation of widget/graphical/data objects. Only the core objects are expected to exist on the implementor (root widget, etc) """
+        if not hasattr(self, '_active_window_visible_intervals_dict'):
+            self.LiveWindowEventIntervalMonitoringMixin_on_init()
+            self.LiveWindowEventIntervalMonitoringMixin_on_setup()
+            
+        connections = {}
+        connections['LiveWindowEventIntervalMonitoringMixin_entered'] = self.sigOnIntervalEnteredWindow.connect(self.on_visible_event_intervals_added)
+        connections['LiveWindowEventIntervalMonitoringMixin_exited'] = self.sigOnIntervalExitedindow.connect(self.on_visible_event_intervals_removed)
+
+
+    @pyqtExceptionPrintingSlot()
+    def LiveWindowEventIntervalMonitoringMixin_on_destroy(self):
+        """ perfrom teardown/destruction of anything that needs to be manually removed or released """
+        pass
+
+    @pyqtExceptionPrintingSlot(float, float)
+    def LiveWindowEventIntervalMonitoringMixin_on_window_update(self, new_start=None, new_end=None):
+        """ called to perform updates when the active window changes. Redraw, recompute data, etc. """
+        if not self._enable_live_window_event_interval_monitoring:
+            return
+        self.on_visible_intervals_changed() # TODO 2025-12-18 - PERFORMANCE
+            
+    @pyqtExceptionPrintingSlot(object)
+    def LiveWindowEventIntervalMonitoringMixin_on_window_update_rate_limited(self, evt):
+        self.LiveWindowEventIntervalMonitoringMixin_on_window_update(*evt)
+        
+
+    @property
+    def active_window_visible_intervals_dict(self):
+        """The active_window_visible_intervals_dict property."""
+        return self._active_window_visible_intervals_dict
+    @active_window_visible_intervals_dict.setter
+    def active_window_visible_intervals_dict(self, value):
+        self._active_window_visible_intervals_dict = value
+
+    @property
+    def enable_live_window_event_interval_monitoring(self):
+        """The enable_live_window_event_interval_monitoring property."""
+        return self._enable_live_window_event_interval_monitoring
+    @enable_live_window_event_interval_monitoring.setter
+    def enable_live_window_event_interval_monitoring(self, value):
+        self._enable_live_window_event_interval_monitoring = value
+
+    def find_intervals_in_active_window(self, debug_print=False) -> Dict[str, pd.DataFrame]:
+        raise NotImplementedError(f'Implementors must override!')
+
+    @pyqtExceptionPrintingSlot()
+    def on_visible_intervals_changed(self):
+        """ called to get the changes after intervals are updated. 
+        """        
+        print(f'LiveWindowEventIntervalMonitoringMixin.on_visible_intervals_changed()')
+        all_live_window_included_intervals_dict = self.find_intervals_in_active_window()
+
+        curr_all_live_window_visible_interval_changes_dict: Dict[str, Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]] = {} ## current changes dict
+
+        added_rows_dict: Dict[str, pd.DataFrame] = {}
+        removed_rows_dict: Dict[str, pd.DataFrame] = {}
+        
+
+        for dataseries_name, intervals_df in all_live_window_included_intervals_dict.items():
+            extant_intervals_df = self.active_window_visible_intervals_dict.get(dataseries_name, PandasHelpers.empty_df_like(intervals_df))
+            
+            # ## INPUTS: intervals_df, extant_intervals_df
+            curr_all_live_window_visible_interval_changes_dict[dataseries_name] = PandasHelpers.get_df_row_changes(potentially_updated_df=intervals_df, prev_df=extant_intervals_df) 
+            (added_rows, same_rows, removed_rows) = curr_all_live_window_visible_interval_changes_dict[dataseries_name]
+            if len(added_rows) > 0:
+                added_rows_dict[dataseries_name] = added_rows
+            if len(removed_rows) > 0:
+                removed_rows_dict[dataseries_name] = removed_rows
+            
+
+        ## OUTPUTS: curr_all_live_window_visible_interval_changes_dict
+        ## done with update
+        self.active_window_visible_intervals_dict = deepcopy(all_live_window_included_intervals_dict)
+        if len(added_rows_dict) > 0:
+            self.sigOnIntervalEnteredWindow.emit(added_rows_dict)
+        # if len(same_rows) > 0:
+        #     self.sigOnIntervalEnteredWindow.emit(same_rows)
+        if len(removed_rows_dict) > 0:
+            self.sigOnIntervalExitedindow.emit(removed_rows_dict)            
+
+
+    @pyqtExceptionPrintingSlot(object)
+    def on_visible_event_intervals_added(self, added_rows):
+        print(f'LiveWindowEventIntervalMonitoringMixin.on_visible_event_intervals_added(added_rows: {added_rows})')
+        # spike_raster_window.bottom_playback_control_bar_logger.add_log_line(f'visible_event_intervals_added(added_rows: {added_rows})')
+        
+    @pyqtExceptionPrintingSlot(object)
+    def on_visible_event_intervals_removed(self, removed_rows):
+        print(f'LiveWindowEventIntervalMonitoringMixin.visible_event_intervals_removed(removed_rows: {removed_rows})')
+        # spike_raster_window.bottom_playback_control_bar_logger.add_log_line(f'visible_event_intervals_removed(removed_rows: {removed_rows})')
+
+
+
+@metadata_attributes(short_name=None, tags=['epoch', 'intervals', 'rendering'], input_requires=[], output_provides=[], uses=['LiveWindowEventIntervalMonitoringMixin'], used_by=['Spike2DRaster'], creation_date='2025-01-06 15:10', related_items=[])
+class EpochRenderingMixin(LiveWindowEventIntervalMonitoringMixin):
+    """ Implementors render Epochs/Intervals as little rectangles
+    
+    Requires:
+        self.plots
+        self.plots_data
+        
+    Provides:
+        self.plots_data['interval_datasources']: RenderPlotsData
+        self.plots.rendered_epochs: RenderPlots
+        self.ui
+        self.ui.connections
+    
+    Known Conformances:
+        RasterPlot2D: to render laps, PBEs, and more on the 2D plots
+
+    Usage:
+        ## Build a PBEs datasource:
+        laps_interval_datasource = Specific2DRenderTimeEpochsHelper.build_Laps_render_time_epochs_datasource(curr_sess=sess, series_vertical_offset=42.0, series_height=1.0)
+        new_PBEs_interval_datasource = Specific2DRenderTimeEpochsHelper.build_PBEs_render_time_epochs_datasource(curr_sess=sess, series_vertical_offset=43.0, series_height=1.0) # new_PBEs_interval_datasource
+        
+        ## General Adding:
+            active_2d_plot.add_rendered_intervals(new_PBEs_interval_datasource, name='PBEs', child_plots=[background_static_scroll_plot_widget, main_plot_widget], debug_print=True)
+            active_2d_plot.add_rendered_intervals(laps_interval_datasource, name='Laps', child_plots=[background_static_scroll_plot_widget, main_plot_widget], debug_print=True)
+        
+        ## Selectively Adding:
+            # Tests adding PBEs to just a single child plot (main_plot_widget):
+            active_2d_plot.add_rendered_intervals(new_PBEs_interval_datasource, name='PBEs', child_plots=[main_plot_widget], debug_print=True)
+
+        ## Selectively Removing:
+            active_2d_plot.remove_rendered_intervals(name='PBEs', child_plots_removal_list=[main_plot_widget]) # Tests removing a single series from a single plot (main_plot_widget)
+            active_2d_plot.remove_rendered_intervals(name='PBEs') # Tests removing a single series ('PBEs') from all plots it's on
+            
+        ## Clearing:
+            active_2d_plot.clear_all_rendered_intervals()
+    
+    Signal Flow Documentation:
+        ======================
+        
+        sigRenderedIntervalsListChanged Signal Flow:
+        ---------------------------------------------
+        This signal is emitted when intervals are added or removed to notify all listeners
+        that the datasource list has changed.
+        
+        Emission Points:
+        - add_rendered_intervals(): Emitted when a NEW datasource is added (line 519)
+        - remove_rendered_intervals(): Emitted after datasource is deleted (line 568)
+        
+        Connected Handlers:
+        1. _on_update_rendered_intervals() (Spike3DRasterWindowWidget):
+           - Refreshes config widget to match current datasources
+           - Calls extract_interval_display_config_lists() → update_from_configs()
+           - Uses _is_programmatic_update flag to prevent circular updates
+        
+        2. on_rendered_intervals_list_changed() (Spike3DRasterBottomPlaybackControlBarWidget):
+           - Updates jump target series options in bottom bar
+        
+        3. on_update_right_sidebar_visible_interval_info_tables() (Spike3DRasterWindowWidget):
+           - Updates right sidebar interval info tables
+        
+        UI-Initiated Removal Flow:
+        --------------------------
+        When user clicks "Remove" in the config widget context menu:
+        
+        1. EpochRenderConfigWidget.onRemoveEpochSeries()
+           → Emits: sigRemoveRequested.emit(self)
+        
+        2. EpochRenderConfigsListWidget.on_remove_epoch_series(widget)
+           → Removes widget from UI layout
+           → Removes from out_render_config_widgets_dict
+           → Removes from self.configs
+           → Emits: sigRemoveRequested.emit(self, config_name)
+        
+        3. EpochRenderingMixin.on_remove_epoch_series_from_widget(widget, config_name)
+           → Calls: perform_remove_epoch_intervals([config_name])
+        
+        4. EpochRenderingMixin.perform_remove_epoch_intervals()
+           → Calls: remove_rendered_intervals(name) for each key
+        
+        5. EpochRenderingMixin.remove_rendered_intervals()
+           → Removes rendered items from plots
+           → Disconnects datasource signal (prevents memory leaks)
+           → Deletes: rendered_epochs[name] and interval_datasources[name]
+           → Emits: sigRenderedIntervalsListChanged.emit(self)
+        
+        6. _on_update_rendered_intervals() handler
+           → extract_interval_display_config_lists() (only includes existing datasources)
+           → update_from_configs() (rebuilds widget list to match datasources)
+           → Uses _is_programmatic_update flag to prevent sigAnyConfigChanged emission
+        
+        Circular Update Prevention:
+        ---------------------------
+        - update_from_configs() sets _is_programmatic_update = True
+        - on_config_ui_updated() checks this flag and does NOT emit sigAnyConfigChanged
+        - This prevents: Widget update → Config change → Datasource update → Widget update loop
+        
+        Signal Cleanup:
+        --------------
+        - Datasource signals are disconnected before deletion (line 563)
+        - Prevents orphaned signal connections and errors after deletion
+        - Widget deletion uses deleteLater() for safe async cleanup
+        
+    """
+
+    sigOnIntervalEnteredWindow = QtCore.Signal(object) # pyqtSignal(object)
+    sigOnIntervalExitedindow = QtCore.Signal(object)
+    sigRenderedIntervalsListChanged = QtCore.Signal(object) # signal emitted whenever the list of rendered intervals changed (add/remove)
+
+
+
+    @property
+    def interval_rendering_plots(self):
+        """ returns the list of child subplots/graphics (usually PlotItems) that participate in rendering intervals """
+        raise NotImplementedError # MUST OVERRIDE in child
+        # return [self.plots.background_static_scroll_window_plot, self.plots.main_plot_widget] # for spike_raster_plt_2d
+    
+    @property
+    def interval_datasources(self):
+        """The interval_datasources property. A RenderPlotsData object """
+        return self.plots_data['interval_datasources']
+
+
+    @property
+    def interval_datasource_names(self):
+        """The interval_datasources property."""
+        return list(self.interval_datasources.dynamically_added_attributes) # ['CustomPBEs', 'PBEs', 'Ripples', 'Laps', 'Replays', 'SessionEpochs']
+
+    @property
+    def interval_datasource_updating_connections(self):
+        """The interval_datasource_updating_connections property. A ConnectionsContainer object """
+        return self.ui.connections
+    
+    @property
+    def rendered_epochs(self):
+        """The interval_datasources property."""
+        return self.plots.rendered_epochs
+    
+    @property
+    def rendered_epoch_series_names(self):
+        """The rendered_epoch_names property."""
+        return [a_name for a_name in self.rendered_epochs.keys() if ((a_name != 'name') and (a_name != 'context'))]
+
+
+    #######################################################################################################################################
+    
+    @pyqtExceptionPrintingSlot()
+    def EpochRenderingMixin_on_init(self):
+        """ perform any parameters setting/checking during init """
+        self.plots_data['interval_datasources'] = RenderPlotsData('EpochRenderingMixin')
+        self.LiveWindowEventIntervalMonitoringMixin_on_init()
+        self._is_updating_from_widget = False  # Flag to prevent circular updates
+
+        # self.plots_data['interval_datasource_updating_connections'] = ConnectionsContainer('EpochRenderingMixin')
+    
+    @pyqtExceptionPrintingSlot()
+    def EpochRenderingMixin_on_setup(self):
+        """ perfrom setup/creation of widget/graphical/data objects. Only the core objects are expected to exist on the implementor (root widget, etc) """
+        self.plots.rendered_epochs = RenderPlots('EpochRenderingMixin') # the container to hold the time rectangles
+        self.LiveWindowEventIntervalMonitoringMixin_on_setup()
+        
+
+    @pyqtExceptionPrintingSlot()
+    def EpochRenderingMixin_on_buildUI(self):
+        """ perfrom setup/creation of widget/graphical/data objects. Only the core objects are expected to exist on the implementor (root widget, etc) """
+        interval_datasources = self.plots_data.get('interval_datasources', None)
+        if interval_datasources is None:
+            ## needs init:
+            self.EpochRenderingMixin_on_init()
+            
+        rendered_epochs = getattr(self.plots, 'rendered_epochs', None)
+        if rendered_epochs is None:
+            ## needs setup:
+            self.EpochRenderingMixin_on_setup()
+            
+        # Adds the self.ui and self.ui.connections if they don't exist
+        if not hasattr(self, 'ui'):
+            # if the window has no .ui property, create one:
+            setattr(self, 'ui', PhoUIContainer())
+            
+        if isinstance(self.ui, DynamicParameters):            
+            # Need this workaround because hasattr fails for DynamicParameters/PhoUIContainer right now:
+            self.ui.setdefault('connections', ConnectionsContainer())
+        else:
+            if not hasattr(self.ui, 'connections'):
+                self.ui.connections = ConnectionsContainer()
+
+        self.LiveWindowEventIntervalMonitoringMixin_on_buildUI()
+        
+
+    @pyqtExceptionPrintingSlot()
+    def EpochRenderingMixin_on_destroy(self):
+        """ perfrom teardown/destruction of anything that needs to be manually removed or released """
+        # TODO: REGISTER AND IMPLEMENT
+        self.LiveWindowEventIntervalMonitoringMixin_on_destroy()
+        raise NotImplementedError
+        pass
+
+    @pyqtExceptionPrintingSlot(float, float)
+    def EpochRenderingMixin_on_window_update(self, new_start=None, new_end=None):
+        """ called to perform updates when the active window changes. Redraw, recompute data, etc. """
+        self.LiveWindowEventIntervalMonitoringMixin_on_window_update(new_start, new_end)
+        raise NotImplementedError
+        pass
+
+    ############### Rate-Limited SLots ###############:
+    ##################################################
+    ## For use with pg.SignalProxy
+    # using signal proxy turns original arguments into a tuple
+    @pyqtExceptionPrintingSlot(object)
+    def EpochRenderingMixin_on_window_update_rate_limited(self, evt):
+        self.EpochRenderingMixin_on_window_update(*evt)
+        
+
+    
+    #######################################################################################################################################
+    
+    def _block_datasource_signals(self):
+        """Context manager to temporarily block datasource update signals during widget-driven updates"""
+        class _SignalBlocker:
+            def __init__(self, mixin):
+                self.mixin = mixin
+                self.blocked_datasources = {}
+            def __enter__(self):
+                self.mixin._is_updating_from_widget = True
+                for name, ds in self.mixin.interval_datasources.items():
+                    if hasattr(ds, 'source_data_changed_signal'):
+                        # Block signals on the QObject (datasource), not on the signal itself
+                        # blockSignals() blocks ALL signals from the object, which is what we want
+                        self.blocked_datasources[name] = ds.blockSignals(True)
+                return self
+            def __exit__(self, *args):
+                for name, was_blocked in self.blocked_datasources.items():
+                    if name in self.mixin.interval_datasources:
+                        # Restore previous blocking state on the datasource QObject
+                        self.mixin.interval_datasources[name].blockSignals(was_blocked)
+                self.mixin._is_updating_from_widget = False
+        
+        return _SignalBlocker(self)
+    
+    @pyqtExceptionPrintingSlot(object)
+    def EpochRenderingMixin_on_interval_datasource_changed(self, datasource: IntervalsDatasource):
+        """ emit our own custom signal when the general datasource update method returns """
+        if self._is_updating_from_widget:
+            return  # Skip if update is from widget to prevent circular updates
+        # print(f'datasource: {datasource.custom_datasource_name}')
+        self.add_rendered_intervals(datasource, name=datasource.custom_datasource_name, debug_print=False) # updates the rendered intervals on the change
+        
+        
+
+    # Render2DEventRectanglesHelper.build_IntervalRectsItem_from_interval_datasource
+    def add_rendered_intervals(self, interval_datasource: Union[pd.DataFrame, IntervalsDatasource], name=None, child_plots=None, debug_print=False, 
+        position_mode: AddedEpochPositionNormalizationMode=AddedEpochPositionNormalizationMode.ABSOLUTE,
+        **vis_kwargs):
+        """ adds or updates the intervals specified by the interval_datasource to the plots 
+        
+        Inputs: 
+            interval_datasource: IntervalDatasource
+            name: str, an optional but highly recommended string identifier like 'Laps'
+            child_plots: an optional list of plots to add the intervals to. If None are specified, the defaults are used (defined by the implementor)
+            
+        Returns:
+            returned_rect_items: a dictionary of tuples containing the newly created rect items and the plots they were added to.
+            
+            
+        Uses: 'RectangleRenderTupleHelpers', 'RenderedEpochsItemsContainer', 'IntervalRectsItem', 'self._perform_add_render_item(...)', 'EpochRenderingMixin.compute_bounds_adjustment_for_rect_item'
+        
+        Example:
+            active_pbe_interval_rects_item = Render2DEventRectanglesHelper.build_IntervalRectsItem_from_interval_datasource(interval_datasources.PBEs)
+            
+        Usages:
+            Used in the EpochRenderingMixin Convencince methods in Spike2DRaster:
+                .add_laps_intervals(...)
+                .add_PBEs_intervals(...)
+        
+        """
+        # vis_column_kwarg_keys = ['y_location', 'height', 'pen_color', 'brush_color']
+        if isinstance(interval_datasource, pd.DataFrame):
+            ## it's a dataframe, build a datasource
+            from neuropy.utils.mixins.time_slicing import TimeColumnAliasesProtocol
+            
+            interval_df: pd.DataFrame = deepcopy(interval_datasource)
+            interval_df = TimeColumnAliasesProtocol.renaming_synonym_columns_if_needed(df=interval_df, required_columns_synonym_dict=IntervalsDatasource._time_column_name_synonyms)
+            interval_datasource = General2DRenderTimeEpochs.build_render_time_epochs_datasource(interval_df)
+
+
+        assert isinstance(interval_datasource, IntervalsDatasource), f"interval_datasource: must be an IntervalsDatasource object but instead is of type: {type(interval_datasource)}"
+        if name is None:
+            print(f'WARNING: no name provided for rendered intervals. Defaulting to datasource name: "{interval_datasource.custom_datasource_name}"')
+            name = interval_datasource.custom_datasource_name
+            
+        # Update the custom datasource name with the provided name
+        interval_datasource.custom_datasource_name = name
+        
+        rendered_intervals_list_did_change = False
+        extant_datasource = self.interval_datasources.get(name, None)
+        if extant_datasource is None:
+            # no extant datasource with this name, create it:
+            self.interval_datasources[name] = interval_datasource # add new datasource.
+            # Connect the source_data_changed_signal to handle changes to the datasource:
+            
+            self.interval_datasources[name].source_data_changed_signal.connect(self.EpochRenderingMixin_on_interval_datasource_changed)
+            rendered_intervals_list_did_change = True
+
+        else:
+            # extant_datasource exists!
+            if debug_print:
+                print(f'WARNING: extant_datasource with the name ({name}) already exists. Attempting to update.')
+            if extant_datasource == interval_datasource:
+                # already the same datasource
+                if debug_print:
+                    print(f'\t already the same datasource. Continuing to try and update.')
+            else:
+                # Otherwise the datasource should be replaced:
+                if debug_print:
+                    print(f'\t replacing extant datasource.')
+                # Disconnect the previous datasource from the update signal before replacing
+                if hasattr(extant_datasource, 'source_data_changed_signal'):
+                    try:
+                        extant_datasource.source_data_changed_signal.disconnect(self.EpochRenderingMixin_on_interval_datasource_changed)
+                    except (TypeError, RuntimeError):
+                        pass  # Connection may not exist or already disconnected
+                self.interval_datasources[name] = interval_datasource
+                # Connect the source_data_changed_signal to handle changes to the datasource:
+                self.interval_datasources[name].source_data_changed_signal.connect(self.EpochRenderingMixin_on_interval_datasource_changed)
+                        
+        
+        ## Update the visual properties if provided
+        if len(vis_kwargs) > 0:
+            self.interval_datasources[name].update_visualization_properties(lambda active_df, **kwargs: General2DRenderTimeEpochs._update_df_visualization_columns(active_df, **(vis_kwargs | kwargs))) ## Fully inline
+        
+        returned_rect_items = {}
+
+
+        def _custom_format_tooltip_for_rect_data(rect_index: int, rect_data_tuple: Tuple) -> str:
+            """ hover info text tooltip for each epoch in the `IntervalRectsItem`
+            Captures: name 
+            rect_data_tuple = self.data[rect_index]
+            start_t, series_vertical_offset, duration_t, series_height, pen, brush = rect_data_tuple
+            """
+            start_t, series_vertical_offset, duration_t, series_height, pen, brush = rect_data_tuple
+            ## get the optional label field if `rect_data_tuple` is a `IntervalRectsItemData` instead of a plain tuple
+            a_label = None
+            if not isinstance(rect_data_tuple, Tuple):
+                a_label = rect_data_tuple.label
+            
+            end_t = start_t + duration_t
+            if a_label:
+                tooltip_text = f"{a_label}\n{name}[{rect_index}]\nStart: {start_t:.3f}\nEnd: {end_t:.3f}\nDuration: {duration_t:.3f}"
+            else:
+                tooltip_text = f"{name}[{rect_index}]\nStart: {start_t:.3f}\nEnd: {end_t:.3f}\nDuration: {duration_t:.3f}"
+
+            # tooltip_text = f"{name}[{rect_index}]\nStart: {start_t:.3f}\nEnd: {end_t:.3f}\nDuration: {duration_t:.3f}" # The tooltip is set generically here to 'PBEs', 'Replays' or whatever the dataseries name is
+
+            return tooltip_text
+
+
+
+        # Build the rendered interval item:
+        new_interval_rects_item: IntervalRectsItem = Render2DEventRectanglesHelper.build_IntervalRectsItem_from_interval_datasource(interval_datasource, format_tooltip_fn=deepcopy(_custom_format_tooltip_for_rect_data))
+        new_interval_rects_item.format_item_tooltip_fn = deepcopy(_custom_format_tooltip_for_rect_data)
+        # new_interval_rects_item.setToolTip(name) # The tooltip is set generically here to 'PBEs', 'Replays' or whatever the dataseries name is
+        
+        ######### PLOTS:
+        if child_plots is None:
+            child_plots = self.interval_rendering_plots
+        num_plot_items = len(child_plots)
+        if debug_print:
+            print(f'num_plot_items: {num_plot_items}')
+        
+        extant_rects_plot_items_container = self.rendered_epochs.get(name, None)
+        if extant_rects_plot_items_container is not None:
+            # extant plot exists!
+            if debug_print:
+                print(f'WARNING: extant_rects_plot_item with the name ({name}) already exists. removing.')
+            assert isinstance(extant_rects_plot_items_container, RenderedEpochsItemsContainer), f"extant_rects_plot_item must be RenderedEpochsItemsContainer but type(extant_rects_plot_item): {type(extant_rects_plot_items_container)}"
+            
+            for a_plot in child_plots:
+                if a_plot in extant_rects_plot_items_container:
+                    # Update data in-place instead of remove/recreate
+                    extant_rect_plot_item = extant_rects_plot_items_container[a_plot]
+                    new_data = ColorDataframeColumnHelpers.copy_data(new_interval_rects_item.data)
+                    extant_rect_plot_item.update_data(new_data)
+                    # Preserve tooltip function
+                    extant_rect_plot_item.format_item_tooltip_fn = deepcopy(_custom_format_tooltip_for_rect_data)
+                    returned_rect_items[a_plot.objectName()] = dict(plot=a_plot, rect_item=extant_rect_plot_item)
+                    # Adjust the bounds to fit any children:
+                    EpochRenderingMixin.compute_bounds_adjustment_for_rect_item(a_plot, extant_rect_plot_item, position_mode=position_mode)
+
+                else:
+                    # New plot, add new item
+                    independent_data_copy = ColorDataframeColumnHelpers.copy_data(new_interval_rects_item.data)
+                    extant_rects_plot_items_container[a_plot] = IntervalRectsItem(data=independent_data_copy, format_tooltip_fn=deepcopy(_custom_format_tooltip_for_rect_data))
+                    extant_rects_plot_items_container[a_plot].format_item_tooltip_fn = deepcopy(_custom_format_tooltip_for_rect_data)
+                    self._perform_add_render_item(a_plot, extant_rects_plot_items_container[a_plot])
+                    returned_rect_items[a_plot.objectName()] = dict(plot=a_plot, rect_item=extant_rects_plot_items_container[a_plot])
+                    # Adjust the bounds to fit any children:
+                    EpochRenderingMixin.compute_bounds_adjustment_for_rect_item(a_plot, extant_rects_plot_items_container[a_plot], position_mode=position_mode)
+                
+            ## END for a_plot in child_plots....
+
+
+                    
+        else:
+            # Need to create a new RenderedEpochsItemsContainer with the items:
+            self.rendered_epochs[name] = RenderedEpochsItemsContainer(new_interval_rects_item, child_plots, format_tooltip_fn=deepcopy(_custom_format_tooltip_for_rect_data)) # set the plot item
+            for a_plot, a_rect_item in self.rendered_epochs[name].items(): ## iterate through the plots now:
+                if not isinstance(a_rect_item, str):
+                    if debug_print:
+                        print(f'plotting item')
+                    self._perform_remove_render_item(a_plot, a_rect_item)
+                    self._perform_add_render_item(a_plot, a_rect_item)
+                    returned_rect_items[a_plot.objectName()] = dict(plot=a_plot, rect_item=a_rect_item)
+                    
+                    # Adjust the bounds to fit any children:
+                    EpochRenderingMixin.compute_bounds_adjustment_for_rect_item(a_plot, a_rect_item, position_mode=position_mode)
+            ## END for a_plot, a_rect_item in self.rende....
+
+        if rendered_intervals_list_did_change:
+            self.sigRenderedIntervalsListChanged.emit(self) # Emit the intervals list changed signal when a truely new item is added
+
+        return returned_rect_items
+
+
+    def remove_rendered_intervals(self, name, child_plots_removal_list=None, debug_print=False):
+        """ removes the intervals specified by the interval_datasource to the plots
+
+        Inputs:
+            name: the name of the rendered_repochs to remove.
+            child_plots_removal_list: is not-None, a list of child plots can be specified and rects will only be removed from those plots.
+        
+        Returns:
+            a list of removed items
+        """
+        extant_rects_plot_item = self.rendered_epochs[name]
+        items_to_remove_from_rendered_epochs = []
+        for a_plot, a_rect_item in extant_rects_plot_item.items():
+            if not isinstance(a_plot, str):
+                if child_plots_removal_list is not None:
+                    if (a_plot in child_plots_removal_list):
+                        # only remove if the plot is in the child plots:
+                        self._perform_remove_render_item(a_plot, a_rect_item)
+                        items_to_remove_from_rendered_epochs.append(a_plot)
+                    else:
+                        pass # continue
+                else:
+                    # otherwise remove all
+                    self._perform_remove_render_item(a_plot, a_rect_item)
+                    items_to_remove_from_rendered_epochs.append(a_plot)
+                
+        ## remove the items from the list:
+        for a_key_to_remove in items_to_remove_from_rendered_epochs:
+            del extant_rects_plot_item[a_key_to_remove] # remove the key from the RenderedEpochsItemsContainer
+        
+        if len(self.rendered_epochs[name]) == 0:
+            # if the item is now empty, remove it and its and paired datasource
+            if debug_print:
+                print(f'self.rendered_epochs[{name}] now empty. Removing it and its datasource...')
+            # Disconnect signal connection before removing datasource
+            if name in self.interval_datasources:
+                datasource = self.interval_datasources[name]
+                if hasattr(datasource, 'source_data_changed_signal'):
+                    try:
+                        datasource.source_data_changed_signal.disconnect(self.EpochRenderingMixin_on_interval_datasource_changed)
+                    except (TypeError, RuntimeError):
+                        pass  # Connection may not exist or already disconnected
+            del self.rendered_epochs[name]
+            del self.interval_datasources[name]
+            self.sigRenderedIntervalsListChanged.emit(self) # Emit the intervals list changed signal when the item is removed
+    
+        return items_to_remove_from_rendered_epochs
+
+
+    def clear_all_rendered_intervals(self, child_plots_removal_list=None, debug_print=False):
+        """ removes all rendered rects - a batch version of removed_rendered_intervals(...) """
+        # curr_rendered_epoch_names = list(self.rendered_epochs.keys()) # done to prevent problems with dict changing size during iteration
+        curr_rendered_epoch_names = self.rendered_epoch_series_names
+        # the `self.rendered_epochs` is of type RenderPlots, and it has a 'name' and 'context' property that don't correspond to real outputs
+        for a_name in curr_rendered_epoch_names:
+            if (a_name != 'name') and (a_name != 'context'):
+                if debug_print:
+                    print(f'removing {a_name}...')
+                self.remove_rendered_intervals(a_name, child_plots_removal_list=child_plots_removal_list, debug_print=debug_print)
+      
+      
+    def list_all_rendered_intervals(self, debug_print=True):
+        """ Returns a dictionary containing the hierarchy of all the members. Can optionally also print. 
+        
+        Example:
+            interval_info = active_2d_plot.list_all_rendered_intervals()
+            >>> CONSOLE OUTPUT >>>        
+                rendered_epoch_names: ['PBEs', 'Laps']
+                    name: PBEs - 0 plots:
+                    name: Laps - 2 plots:
+                        background_static_scroll_window_plot: plot[42 intervals]
+                        main_plot_widget: plot[42 intervals]
+                out_dict: {'PBEs': {}, 'Laps': {'background_static_scroll_window_plot': 'plot[42 intervals]', 'main_plot_widget': 'plot[42 intervals]'}}
+            <<<
+        
+            interval_info
+                {'PBEs': {},
+                'Laps': {'background_static_scroll_window_plot': 'plot[42 intervals]',
+                'main_plot_widget': 'plot[42 intervals]'}}
+        """
+        out_dict = {}
+        rendered_epoch_names = self.interval_datasource_names
+        if debug_print:
+            print(f'rendered_epoch_names: {rendered_epoch_names}')
+        for a_name in rendered_epoch_names:
+            out_dict[a_name] = {}
+            a_render_container = self.rendered_epochs[a_name]
+            render_container_items = {key:value for key, value in a_render_container.items() if (not isinstance(key, str))}
+            if debug_print:
+                print(f'\tname: {a_name} - {len(render_container_items)} plots:')
+                # print(f'\t\ta_render_container: {a_render_container}')
+            curr_plots_dict = {}
+            
+            for a_plot, a_rect_item in render_container_items.items():
+                if isinstance(a_plot, str):
+                    ## This is still happening due to the '__class__' item!
+                    print(f'WARNING: there was an item in a_render_container of type string: (a_plot: {a_plot} <{type(a_plot)}>, a_rect_item: {type(a_rect_item)}')
+                    # pass 
+                else:
+                    if isinstance(a_rect_item, IntervalRectsItem):
+                        num_intervals = len(a_rect_item.data)
+                    else:
+                        num_intervals = len(a_rect_item) # for 3D plots, for example, we have a list of meshes which we will use len(...) to get the number of
+                        
+                    if debug_print:
+                        print(f'\t\t{a_plot.objectName()}: plot[{num_intervals} intervals]')
+                    curr_plots_dict[a_plot.objectName()] = f'plot[{num_intervals} intervals]'
+            out_dict[a_name] = curr_plots_dict
+            
+        if debug_print:
+            print(f'out_dict: {out_dict}')
+    
+        return out_dict
+
+
+    def get_all_rendered_intervals_dict(self, debug_print=False) -> Dict[str, Dict[str, IntervalRectsItem]]:
+        """ Returns a dictionary containing the hierarchy of all the members. Can optionally also print. 
+        
+        Example:
+            interval_info_dict = active_2d_plot.get_all_rendered_intervals_dict()
+            >>> CONSOLE OUTPUT >>>        
+                rendered_epoch_names: ['PBEs', 'Laps']
+                    name: PBEs - 0 plots:
+                    name: Laps - 2 plots:
+                        background_static_scroll_window_plot: plot[42 intervals]
+                        main_plot_widget: plot[42 intervals]
+                out_dict: {'PBEs': {}, 'Laps': {'background_static_scroll_window_plot': 'plot[42 intervals]', 'main_plot_widget': 'plot[42 intervals]'}}
+            <<<
+        
+            interval_info
+                {'PBEs': {},
+                'Laps': {'background_static_scroll_window_plot': 'plot[42 intervals]',
+                'main_plot_widget': 'plot[42 intervals]'}}
+        """
+        out_dict = {}
+        rendered_epoch_names = self.interval_datasource_names
+        if debug_print:
+            print(f'rendered_epoch_names: {rendered_epoch_names}')
+        for a_name in rendered_epoch_names:
+            out_dict[a_name] = {}
+            a_render_container = self.rendered_epochs[a_name]
+            render_container_items = {key:value for key, value in a_render_container.items() if (not isinstance(key, str))}
+            if debug_print:
+                print(f'\tname: {a_name} - {len(render_container_items)} plots:')
+                # print(f'\t\ta_render_container: {a_render_container}')
+            curr_plots_dict = {}
+            
+            for a_plot, a_rect_item in render_container_items.items():
+                if isinstance(a_plot, str):
+                    ## This is still happening due to the '__class__' item!
+                    print(f'WARNING: there was an item in a_render_container of type string: (a_plot: {a_plot} <{type(a_plot)}>, a_rect_item: {type(a_rect_item)}')
+                    # pass 
+                else:
+                    if isinstance(a_rect_item, IntervalRectsItem):
+                        num_intervals = len(a_rect_item.data)
+                    else:
+                        num_intervals = len(a_rect_item) # for 3D plots, for example, we have a list of meshes which we will use len(...) to get the number of
+                        
+                    if debug_print:
+                        print(f'\t\t{a_plot.objectName()}: plot[{num_intervals} intervals]')
+
+                    # curr_plots_dict[a_plot.objectName()] = f'plot[{num_intervals} intervals]'
+
+                    curr_plots_dict[a_plot.objectName()] = a_rect_item
+
+
+            out_dict[a_name] = curr_plots_dict
+            
+        if debug_print:
+            print(f'out_dict: {out_dict}')
+
+        return out_dict
+
+
+    @function_attributes(short_name=None, tags=['update', 'intervals', 'rect'], input_requires=[], output_provides=[], uses=[], used_by=['update_epochs_from_configs_widget', 'update_rendered_interval_heights'], creation_date='2026-02-02 12:57', related_items=[])
+    def update_rendered_intervals_visualization_properties(self, update_dict):
+        """ Updates the interval datasources (and thus the actual rendered rectangles) from the provided `update_dict`
+
+        Args:
+            update_dict (_type_): _description_
+
+        Usage:
+
+            from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.Mixins.RenderTimeEpochs.EpochRenderingMixin import EpochRenderingMixin
+
+            rendered_interval_keys = ['_', 'SessionEpochs', 'Laps', '_', 'PBEs', 'Ripples', 'Replays'] # '_' indicates a vertical spacer
+
+            desired_interval_height_ratios = [2.0, 2.0, 1.0, 0.1, 1.0, 1.0, 1.0] # ratio of heights to each interval
+            required_vertical_offsets, required_interval_heights = EpochRenderingMixin.build_stacked_epoch_layout(desired_interval_height_ratios, epoch_render_stack_height=20.0, interval_stack_location='below')
+            stacked_epoch_layout_dict = {interval_key:dict(y_location=y_location, height=height) for interval_key, y_location, height in zip(rendered_interval_keys, required_vertical_offsets, required_interval_heights)}
+
+        """
+        from neuropy.utils.misc import split_list_of_dicts
+        
+        ## Inline Concise: Position Replays, PBEs, and Ripples all below the scatter:
+        for interval_key, interval_update_kwargs in update_dict.items():
+            if interval_key in self.interval_datasources:
+                # Extract visibility settings before updating datasource (handle both single dict and list of dicts)
+                visibility_settings = None
+                is_multi_part_interval_config: bool = isinstance(interval_update_kwargs, (list, tuple))
+                
+                if is_multi_part_interval_config:
+                    ## list of update dicts - each item can have its own isVisible property
+                    a_list_interval_update_kwargs = []
+                    visibility_settings = []
+                    for a_sub_interval_update_kwargs in interval_update_kwargs:
+                        if not isinstance(a_sub_interval_update_kwargs, dict):
+                            a_sub_interval_update_kwargs = a_sub_interval_update_kwargs.to_dict() # deal with EpochDisplayConfig 
+                        a_list_interval_update_kwargs.append(a_sub_interval_update_kwargs)
+                        # Extract visibility from each item (can be None if not specified)
+                        visibility_settings.append(a_sub_interval_update_kwargs.get('isVisible', None))
+                    ## END for a_sub_interval_update_kwargs in interval_update_kwargs...
+                    
+                    ## Update with list
+                    a_list_interval_update_kwargs = split_list_of_dicts(a_list_interval_update_kwargs) ## convert List[Dict[str, Any]] -> Dict[str, List] (list of dicts with same keys to dict of lists
+                    # a_list_interval_update_kwargs = [a_sub_interval_update_kwargs for a_sub_interval_update_kwargs in interval_update_kwargs]
+                    self.interval_datasources[interval_key].update_visualization_properties(lambda active_df, **kwargs: General2DRenderTimeEpochs._update_df_visualization_columns(active_df, **(a_list_interval_update_kwargs | kwargs))) ##  Fixed for multiple lists
+    
+                else:
+                    ## single update item dict
+                    if not isinstance(interval_update_kwargs, dict):
+                        interval_update_kwargs = interval_update_kwargs.to_dict() # deal with EpochDisplayConfig 
+                    visibility_settings = interval_update_kwargs.get('isVisible', None)
+                    self.interval_datasources[interval_key].update_visualization_properties(lambda active_df, **kwargs: General2DRenderTimeEpochs._update_df_visualization_columns(active_df, **(interval_update_kwargs | kwargs))) ## Fully inline
+                
+                # Apply visibility setting to rendered items if provided
+                # For list configs: only apply if all items have the same visibility (or all None)
+                # For single configs: apply directly
+                if visibility_settings is not None and (interval_key in self.rendered_epochs):
+                    if isinstance(visibility_settings, (list, tuple)):
+                        # List case: check if all non-None values are the same
+                        non_none_visibilities = [v for v in visibility_settings if v is not None]
+                        if len(non_none_visibilities) > 0:
+                            # If all non-None values are the same, apply that visibility
+                            if len(set(non_none_visibilities)) == 1:
+                                is_visible = non_none_visibilities[0]
+                                container = self.rendered_epochs[interval_key]
+                                for a_plot, rect_item in container.items():
+                                    if not isinstance(a_plot, str) and isinstance(rect_item, IntervalRectsItem):
+                                        rect_item.setVisible(is_visible)
+                            # If they differ, we can't set per-rectangle visibility, so skip
+                            # (IntervalRectsItem is a single graphics item that renders all rectangles)
+                    else:
+                        # Single config case: apply directly
+                        container = self.rendered_epochs[interval_key]
+                        for a_plot, rect_item in container.items():
+                            if not isinstance(a_plot, str) and isinstance(rect_item, IntervalRectsItem):
+                                rect_item.setVisible(visibility_settings)
+            else:
+                print(f"WARNING: interval_key '{interval_key}' was not found in self.interval_datasources. Skipping update for unknown item.")
+        ## END for interval_key, interval_update_kwargs in update_dict...
+        
+
+
+    # Interval Positioning Helpers _______________________________________________________________________________________ #
+
+    def get_render_intervals_plot_range(self, debug_print=False):
+        """ Gets the most extreme range of all the interval plots 
+            Internally calls `self.get_plot_view_range(a_plot)` on each `self.interval_rendering_plots` to determine the absolute ('x_min', 'x_max', 'y_min','y_max') among all these plots.
+
+        Usage:
+            curr_x_min, curr_x_max, curr_y_min, curr_y_max = active_2d_plot.get_render_intervals_plot_range()
+            (curr_x_min, curr_x_max, curr_y_min, curr_y_max) # (22.3668519082712, 2093.8524703475414, -21.0, 72.85886744622752)
+        
+        """
+        extrema_tuples = []
+        for a_plot in self.interval_rendering_plots:
+            extrema_tuples.append(self.get_plot_view_range(a_plot, debug_print=debug_print))
+        extrema_df = pd.DataFrame(np.array(extrema_tuples), columns=['x_min', 'x_max', 'y_min','y_max'])
+        return (extrema_df['x_min'].min(), extrema_df['x_max'].max(), extrema_df['y_min'].min(), extrema_df['y_max'].max())
+
+
+    def recover_interval_datasources_positioning_properties(self, debug_print=False):
+        """ Tries to recover the positioning properties from each of the interval_datasources of active_2d_plot
+        
+        Usage:
+
+            all_series_positioning_dfs, all_series_compressed_positioning_dfs, all_series_compressed_positioning_update_dicts = active_2d_plot.recover_interval_datasources_positioning_properties()
+            # all_series_positioning_dfs
+            all_series_compressed_positioning_dfs
+
+        all_series_compressed_positioning_dfs: {'PBEs': {'y_location': -11.666666666666668, 'height': 4.166666666666667},
+        'Ripples': {'y_location': -15.833333333333336, 'height': 4.166666666666667},
+        'Replays': {'y_location': -20.000000000000004, 'height': 4.166666666666667},
+        'Laps': {'y_location': -7.083333333333334, 'height': 4.166666666666667},
+        'SessionEpochs': {'y_location': -2.916666666666667, 'height': 2.0833333333333335}}
+
+
+        >> Can restore with:
+
+            all_series_compressed_positioning_update_dicts = { 'SessionEpochs': {'y_location': -2.916666666666667, 'height': 2.0833333333333335},
+            'Laps': {'y_location': -7.083333333333334, 'height': 4.166666666666667},
+            'PBEs': {'y_location': -11.666666666666668, 'height': 4.166666666666667},
+            'Ripples': {'y_location': -15.833333333333336, 'height': 4.166666666666667},
+            'Replays': {'y_location': -20.000000000000004, 'height': 4.166666666666667}}
+            active_2d_plot.update_rendered_intervals_visualization_properties(all_series_compressed_positioning_update_dicts)
+
+
+        """
+        all_series_positioning_dfs = {}
+        all_series_compressed_positioning_dfs = {}
+        all_series_compressed_positioning_update_dicts = {}
+        for a_name, a_ds in self.interval_datasources.items():
+            # print(a_name, a_ds)
+            if isinstance(a_ds, IntervalsDatasource):
+                # all_series_positioning_dfs[a_name], a_compressed_series_positioning_df, series_compressed_positioning_update_dict = a_ds.recover_positioning_properties()
+                all_series_positioning_dfs[a_name], all_series_compressed_positioning_dfs[a_name], series_compressed_positioning_update_dict = a_ds.recover_positioning_properties()
+                if series_compressed_positioning_update_dict is not None:
+                    # only one entry, to be expected
+                    all_series_compressed_positioning_update_dicts[a_name] = series_compressed_positioning_update_dict
+                else:
+                    print(f'ERROR: series_compressed_positioning_update_dict is None for {a_name}. it will not be represented in the output dict.')            
+            else:
+                if debug_print:
+                    print(f'weird a_name, a_ds: {a_name}, {a_ds}, type(a_ds): {type(a_ds)}')
+                pass
+
+        return all_series_positioning_dfs, all_series_compressed_positioning_dfs, all_series_compressed_positioning_update_dicts
+
+
+    def recover_interval_datasources_update_dict_properties(self, debug_print=False):
+        """ Tries to recover the positioning properties from each of the interval_datasources of active_2d_plot
+        
+        Usage:
+
+            all_series_positioning_dfs, all_series_compressed_positioning_dfs, all_series_compressed_positioning_update_dicts = active_2d_plot.recover_interval_datasources_update_dict_properties()
+            # all_series_positioning_dfs
+            all_series_compressed_positioning_dfs
+
+        all_series_compressed_positioning_dfs: {'PBEs': {'y_location': -11.666666666666668, 'height': 4.166666666666667},
+        'Ripples': {'y_location': -15.833333333333336, 'height': 4.166666666666667},
+        'Replays': {'y_location': -20.000000000000004, 'height': 4.166666666666667},
+        'Laps': {'y_location': -7.083333333333334, 'height': 4.166666666666667},
+        'SessionEpochs': {'y_location': -2.916666666666667, 'height': 2.0833333333333335}}
+
+
+        >> Can restore with:
+
+            all_series_compressed_positioning_update_dicts = { 'SessionEpochs': {'y_location': -2.916666666666667, 'height': 2.0833333333333335},
+            'Laps': {'y_location': -7.083333333333334, 'height': 4.166666666666667},
+            'PBEs': {'y_location': -11.666666666666668, 'height': 4.166666666666667},
+            'Ripples': {'y_location': -15.833333333333336, 'height': 4.166666666666667},
+            'Replays': {'y_location': -20.000000000000004, 'height': 4.166666666666667}}
+            active_2d_plot.update_rendered_intervals_visualization_properties(all_series_compressed_positioning_update_dicts)
+
+
+        """
+        all_series_positioning_dfs = {}
+        all_series_compressed_positioning_dfs = {}
+        all_series_compressed_positioning_update_dicts = {}
+        for a_name, a_ds in self.interval_datasources.items():
+            # print(a_name, a_ds)
+            if isinstance(a_ds, IntervalsDatasource):
+                all_series_positioning_dfs[a_name], all_series_compressed_positioning_dfs[a_name], series_compressed_positioning_update_dict = a_ds.recover_update_dict_properties()
+                if series_compressed_positioning_update_dict is not None:
+                    # only one entry, to be expected
+                    all_series_compressed_positioning_update_dicts[a_name] = series_compressed_positioning_update_dict
+                else:
+                    print(f'ERROR: series_compressed_positioning_update_dict is None for {a_name}. it will not be represented in the output dict.')            
+            else:
+                if debug_print:
+                    print(f'weird a_name, a_ds: {a_name}, {a_ds}, type(a_ds): {type(a_ds)}')
+                pass
+
+        return all_series_positioning_dfs, all_series_compressed_positioning_dfs, all_series_compressed_positioning_update_dicts
+
+
+    def recover_interval_flat_positioning_df(self) -> pd.DataFrame:
+        """ returns a single flat dataframe with one entry for each series color 
+        """
+        all_series_positioning_dfs, all_series_compressed_positioning_dfs, all_series_compressed_positioning_update_dicts = self.recover_interval_datasources_positioning_properties()
+        a_flat_df = []
+        for a_series_name, a_df in all_series_compressed_positioning_dfs.items():
+            a_df['series_name'] = a_series_name
+            a_df['series_idx'] = deepcopy(a_df.index)
+            a_flat_df.append(a_df)
+            
+        a_flat_df: pd.DataFrame = pd.concat(a_flat_df, ignore_index=True)
+        a_flat_df['series_y_min'] = deepcopy(a_flat_df['series_vertical_offset'])
+        a_flat_df['series_y_max'] = a_flat_df['series_y_min'] + a_flat_df['series_height']
+
+        return a_flat_df
+
+
+    def get_interval_y_extrema_locations(self) -> Tuple[float, float]:
+        """ returns to top and bottom y-positions for the intervals, as would be needed for positioning a new one
+        
+            bottom_y_min, top_y_max = active_2d_plot.get_interval_y_extrema_locations()
+            bottom_y_min, top_y_max
+        """
+        curr_pos_df: pd.DataFrame = deepcopy(self.recover_interval_flat_positioning_df())
+        bottom_y_min: float = curr_pos_df['series_y_min'].min()
+        top_y_max: float = curr_pos_df['series_y_max'].max() # if it's to be placed above the plot, we need to add the top of the plot to each of the offsets
+        return bottom_y_min, top_y_max
+    
+
+    @function_attributes(short_name=None, tags=['layout', 'epochs'], input_requires=[], output_provides=[], uses=['self.build_stacked_epoch_layout', 'self.get_render_intervals_plot_range', 'self.update_rendered_intervals_visualization_properties'], used_by=[], creation_date='2024-07-03 11:23', related_items=[])
+    def apply_stacked_epoch_layout(self, rendered_interval_keys, desired_interval_height_ratios, epoch_render_stack_height=20.0, interval_stack_location='below', debug_print=True):
+        """ Builds and applies a stacked layout for the list of specified epochs
+
+            rendered_interval_keys = ['_', 'SessionEpochs', 'Laps', '_', 'PBEs', 'Ripples', 'Replays'] # '_' indicates a vertical spacer
+            rendered_interval_heights = [0.2, 1.0, 1.0, 0.1, 1.0, 1.0, 1.0] # ratio of heights to each interval
+            vertical_spacer_height = 0.2
+            epoch_render_stack_height = 40.0 # the height of the entire stack containing all rendered epochs:
+            interval_stack_location = 'below' # 'below' or 'above'
+
+        Usage:
+            from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.Mixins.RenderTimeEpochs.Specific2DRenderTimeEpochs import General2DRenderTimeEpochs
+
+            rendered_interval_keys = ['_', 'SessionEpochs', 'Laps', '_', 'PBEs', 'Ripples', 'Replays'] # '_' indicates a vertical spacer
+            desired_interval_height_ratios = [0.2, 0.5, 1.0, 0.1, 1.0, 1.0, 1.0] # ratio of heights to each interval (and the vertical spacers)
+            stacked_epoch_layout_dict = active_2d_plot.apply_stacked_epoch_layout(rendered_interval_keys, desired_interval_height_ratios, epoch_render_stack_height=20.0, interval_stack_location='below')
+            stacked_epoch_layout_dict
+
+
+            ## Inline Concise: Position Replays, PBEs, and Ripples all below the scatter:
+            for interval_key, y_location, height in zip(rendered_interval_keys, required_vertical_offsets, required_interval_heights):
+                if interval_key in active_2d_plot.interval_datasources:
+                    active_2d_plot.interval_datasources[interval_key].update_visualization_properties(lambda active_df, **kwargs: General2DRenderTimeEpochs._update_df_visualization_columns(active_df, y_location=y_location, height=height, **kwargs)) ## Fully inline
+        """
+        assert len(rendered_interval_keys) == len(desired_interval_height_ratios), f"len(rendered_interval_keys): {len(rendered_interval_keys)} != len(desired_interval_height_ratios): {len(desired_interval_height_ratios)}"
+        required_vertical_offsets, required_interval_heights = self.build_stacked_epoch_layout(desired_interval_height_ratios, epoch_render_stack_height=epoch_render_stack_height, interval_stack_location=interval_stack_location)
+        
+        if interval_stack_location == 'below':
+            # required_vertical_offsets = required_vertical_offsets * -1.0 # make offsets negative if it's below the plot
+            pass
+        elif interval_stack_location == 'above':
+            # if it's to be placed above the plot, we need to add the top of the plot to each of the offsets:
+            curr_x_min, curr_x_max, curr_y_min, curr_y_max = self.get_render_intervals_plot_range()
+            required_vertical_offsets = required_vertical_offsets + curr_y_max # TODO: get top of plot
+        else:
+            print(f"interval_stack_location: str must be either ('below' or 'above') but was {interval_stack_location}")
+            raise NotImplementedError
+        
+        # Build update dict:
+        stacked_epoch_layout_dict = {interval_key:dict(y_location=y_location, height=height) for interval_key, y_location, height in zip(rendered_interval_keys, required_vertical_offsets, required_interval_heights)} # Build a stacked_epoch_layout_dict to update the display
+        self.update_rendered_intervals_visualization_properties(stacked_epoch_layout_dict)
+
+        return stacked_epoch_layout_dict
+
+
+
+    @function_attributes(short_name=None, tags=['layout', 'epochs'], input_requires=[], output_provides=[], uses=['self.build_stacked_epoch_layout', 'self.get_render_intervals_plot_range', 'self.update_rendered_intervals_visualization_properties'], used_by=[], creation_date='2024-07-03 11:23', related_items=[])
+    def apply_relative_epoch_layout(self, rendered_interval_keys_to_adjust: Union[str, List[str]], desired_interval_heights: Union[float, List[float]]=0.9, desired_intra_interval_padding: float=0.1, interval_stack_location='below', debug_print=True):
+        """ Builds and applies a stacked layout for the list of specified epochs
+
+            rendered_interval_keys = ['_', 'SessionEpochs', 'Laps', '_', 'PBEs', 'Ripples', 'Replays'] # '_' indicates a vertical spacer
+            rendered_interval_heights = [0.2, 1.0, 1.0, 0.1, 1.0, 1.0, 1.0] # ratio of heights to each interval
+            vertical_spacer_height = 0.2
+            epoch_render_stack_height = 40.0 # the height of the entire stack containing all rendered epochs:
+            interval_stack_location = 'below' # 'below' or 'above'
+
+        Usage:
+            from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.Mixins.RenderTimeEpochs.Specific2DRenderTimeEpochs import General2DRenderTimeEpochs
+
+            rendered_interval_keys = ['_', 'SessionEpochs', 'Laps', '_', 'PBEs', 'Ripples', 'Replays'] # '_' indicates a vertical spacer
+            desired_interval_height_ratios = [0.2, 0.5, 1.0, 0.1, 1.0, 1.0, 1.0] # ratio of heights to each interval (and the vertical spacers)
+            stacked_epoch_layout_dict = active_2d_plot.apply_stacked_epoch_layout(rendered_interval_keys, desired_interval_height_ratios, epoch_render_stack_height=20.0, interval_stack_location='below')
+            stacked_epoch_layout_dict
+
+
+            ## Inline Concise: Position Replays, PBEs, and Ripples all below the scatter:
+            for interval_key, y_location, height in zip(rendered_interval_keys, required_vertical_offsets, required_interval_heights):
+                if interval_key in active_2d_plot.interval_datasources:
+                    active_2d_plot.interval_datasources[interval_key].update_visualization_properties(lambda active_df, **kwargs: General2DRenderTimeEpochs._update_df_visualization_columns(active_df, y_location=y_location, height=height, **kwargs)) ## Fully inline
+        """
+        if isinstance(rendered_interval_keys_to_adjust, str):
+            rendered_interval_keys_to_adjust = [rendered_interval_keys_to_adjust] ## List[str] with single element
+            
+        if isinstance(desired_interval_heights, float):
+            desired_interval_heights = [desired_interval_heights] * len(rendered_interval_keys_to_adjust) ## repeat once for each key to adjust
+                
+        assert len(rendered_interval_keys_to_adjust) == len(desired_interval_heights), f"len(rendered_interval_keys): {len(rendered_interval_keys_to_adjust)} != len(desired_interval_heights): {len(desired_interval_heights)}"
+        if not isinstance(desired_interval_heights, NDArray):
+            desired_interval_heights = np.array(desired_interval_heights)
+
+        curr_pos_df: pd.DataFrame = deepcopy(self.recover_interval_flat_positioning_df())
+        # required_vertical_offsets, required_interval_heights = self.build_stacked_epoch_layout(desired_interval_heights, epoch_render_stack_height=epoch_render_stack_height, interval_stack_location=interval_stack_location)
+        
+        if interval_stack_location == 'below':
+            # required_vertical_offsets = required_vertical_offsets * -1.0 # make offsets negative if it's below the plot
+            bottom_y_min: float = curr_pos_df['series_y_min'].min()
+            ## determine the required_vertical_offsets
+            required_vertical_offsets = []
+            _initial_y_offset = (bottom_y_min + desired_intra_interval_padding)
+            for i, a_height in enumerate(desired_interval_heights):
+                required_vertical_offsets.append(_initial_y_offset)
+                _initial_y_offset -= (a_height + desired_intra_interval_padding)        
+
+            # required_vertical_offsets = bottom_y_min - (desired_interval_heights + desired_intra_interval_padding) ## pad each interval with the padding
+            ## OUTPUT: required_vertical_offsets
+
+        elif interval_stack_location == 'above':
+            # if it's to be placed above the plot, we need to add the top of the plot to each of the offsets:
+            top_y_max: float = curr_pos_df['series_y_max'].max()
+            # curr_x_min, curr_x_max, curr_y_min, curr_y_max = self.get_render_intervals_plot_range()
+            # required_vertical_offsets = required_vertical_offsets + curr_y_max # TODO: get top of plot            
+            ## determine the required_vertical_offsets
+            # required_vertical_offsets = top_y_max + desired_interval_heights
+            required_vertical_offsets = []
+            _initial_y_offset = (top_y_max + desired_intra_interval_padding)
+            for i, a_height in enumerate(desired_interval_heights):
+                required_vertical_offsets.append(_initial_y_offset)
+                _initial_y_offset += (a_height + desired_intra_interval_padding)        
+        else:
+            print(f"interval_stack_location: str must be either ('below' or 'above') but was {interval_stack_location}")
+            raise NotImplementedError
+        
+        required_vertical_offsets = np.array(required_vertical_offsets)        
+        # Build update dict:
+        stacked_epoch_layout_dict = {interval_key:dict(y_location=y_location, height=height) for interval_key, y_location, height in zip(rendered_interval_keys_to_adjust, required_vertical_offsets, desired_interval_heights)} # Build a stacked_epoch_layout_dict to update the display
+        self.update_rendered_intervals_visualization_properties(stacked_epoch_layout_dict)
+
+        return stacked_epoch_layout_dict
+    
+
+    # Separator Lines ____________________________________________________________________________________________________ #
+
+    def add_raster_spikes_and_epochs_separator_line(self):
+        """ adds a thick separator line between the spikes and the epochs. """
+        _out_lines_dict = {}
+        for a_dest_plot in self.interval_rendering_plots:
+            _out_lines_dict[a_dest_plot.objectName()] = a_dest_plot.addLine(x=None, y=0.0, pen={'color':'w', 'width':4.0}, name='EpochDividerLine') # pyphoplacecellanalysis.External.pyqtgraph.graphicsItems.InfiniteLine.InfiniteLine
+        return _out_lines_dict
+
+
+
+    # 2023-10-16 - Interval `EpochDisplayConfig` extraction from datasources: ____________________________________________ #
+    @function_attributes(short_name=None, tags=['panel', 'parameters'], input_requires=[], output_provides=[], uses=[], used_by=['.extract_interval_display_config_df'], creation_date='2025-02-11 02:12', related_items=[])
+    def extract_interval_display_config_lists(self) -> Dict: #[str, EpochDisplayConfig]:
+        """ Build the EpochDisplayConfig lists for each interval datasource
+
+        
+        #TODO 2026-02-02 11:39: - [ ] Doesn't quite work for multi-color datasources
+        
+        
+        Usage:
+        
+            import panel as pn
+            pn.extension()
+
+            out_configs_dict = active_2d_plot.extract_interval_display_config_lists()
+            pn.Row(*[pn.Column(*[pn.Param(a_sub_v) for a_sub_v in v]) for k,v in out_configs_dict.items()])
+
+            
+            
+            
+            
+        """
+        from pyphoplacecellanalysis.PhoPositionalData.plotting.mixins.epochs_plotting_mixins import EpochDisplayConfig
+        out_configs_dict = {}
+        rendered_epoch_names = self.interval_datasource_names
+        for a_name in rendered_epoch_names:
+            a_ds = self.interval_datasources[a_name]
+            result = EpochDisplayConfig.init_configs_list_from_interval_datasource_df(a_name, a_ds)
+            out_configs_dict[a_name] = result
+
+        return out_configs_dict
+
+
+    @function_attributes(short_name=None, tags=['intervals'], input_requires=[], output_provides=[], uses=['.extract_interval_display_config_lists'], used_by=[], creation_date='2025-06-16 12:48', related_items=[])
+    def extract_interval_display_config_df(self) -> pd.DataFrame: #[str, EpochDisplayConfig]:
+        """ Build the easy to understand dataframe with a row for each interval datasource
+
+
+        Usage:
+
+            import panel as pn
+            pn.extension()
+
+            out_configs_dict = active_2d_plot.extract_interval_display_config_lists()
+            pn.Row(*[pn.Column(*[pn.Param(a_sub_v) for a_sub_v in v]) for k,v in out_configs_dict.items()])
+
+
+            out_configs_df = active_2d_plot.extract_interval_display_config_df()
+
+        """
+        epoch_display_configs = self.extract_interval_display_config_lists()
+        out_configs_df = []
+        for a_name, a_config_list in epoch_display_configs.items():
+            num_configs: int = len(a_config_list)
+            for (i, a_config) in enumerate(a_config_list):
+                if num_configs > 1:
+                    config_name: str = f'{a_name}[{i}]'
+                else:
+                    config_name: str = a_name
+                # a_config
+                out_config_dict = {'name': config_name} | deepcopy(a_config.to_dict())
+                out_configs_df.append(out_config_dict) # [a_name] = result
+
+
+        out_configs_df: pd.DataFrame = pd.DataFrame(out_configs_df)
+        out_configs_df['y0_location'] = out_configs_df['y_location']
+        out_configs_df['y1_location'] = out_configs_df['y0_location'] + out_configs_df['height']
+        return out_configs_df
+
+
+
+    
+
+    # @function_attributes(short_name=None, tags=['epoch', 'epoch_render_config_widget'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2024-07-02 03:38', related_items=[])
+    # def build_or_update_epoch_render_configs_widget(self, parent=None):
+    #     """
+    #     Called to update the render epoch configuration manager from the internal epoch datasources
+    #     """
+    #     from pyphoplacecellanalysis.GUI.Qt.Widgets.EpochRenderConfigWidget.EpochRenderConfigWidget import EpochRenderConfigsListWidget
+
+    #     epoch_display_configs = self.extract_interval_display_config_lists()
+    #     an_epochs_display_list_widget = self.ui.get('epochs_render_configs_widget', None)
+    #     if an_epochs_display_list_widget is None:
+    #         # create a new one:    
+    #         an_epochs_display_list_widget:EpochRenderConfigsListWidget = EpochRenderConfigsListWidget(epoch_display_configs, parent=parent)
+    #         self.ui.epochs_render_configs_widget = an_epochs_display_list_widget
+    #     else:
+    #         an_epochs_display_list_widget.update_from_configs(configs=epoch_display_configs)
+
+
+    @function_attributes(short_name=None, tags=['epoch', 'epoch_render_config_widget', 'epochs', 'epoch_render_configs', 'update', 'sync'], input_requires=[], output_provides=[], uses=['self.extract_interval_display_config_lists'], used_by=[], creation_date='2024-07-03 11:27', related_items=['update_epochs_from_configs_widget'])
+    def build_or_update_epoch_render_configs_widget(self, parent=None):
+        """ `Plotted Rects` -> `configs widget`
+        Called to update the render epoch configuration manager from the internal epoch datasources
+        """
+        from pyphoplacecellanalysis.GUI.Qt.Widgets.EpochRenderConfigWidget.EpochRenderConfigWidget import EpochRenderConfigsListWidget
+        
+        epoch_display_configs = self.extract_interval_display_config_lists()
+        an_epochs_display_list_widget = self.ui.get('epochs_render_configs_widget', None)
+        if an_epochs_display_list_widget is None:
+            # create a new one:    
+            print(f'no epochs_render_configs_widget exists, creating a new one...')
+            an_epochs_display_list_widget:EpochRenderConfigsListWidget = EpochRenderConfigsListWidget(epoch_display_configs, parent=parent)
+            self.ui.epochs_render_configs_widget = an_epochs_display_list_widget
+            # Check if connection already exists before creating new one
+            if 'epochs_render_configs_widget_updated' in self.ui.connections:
+                # Disconnect existing connection first
+                try:
+                    an_epochs_display_list_widget.sigAnyConfigChanged.disconnect(self.ui.connections['epochs_render_configs_widget_updated'])
+                except (TypeError, RuntimeError):
+                    pass  # Connection may not exist or already disconnected
+            self.ui.connections['epochs_render_configs_widget_updated'] = an_epochs_display_list_widget.sigAnyConfigChanged.connect(lambda x: self.update_epochs_from_configs_widget())
+            # Connect refresh signal to rebuild widget from datasources
+            if 'epochs_render_configs_widget_refresh' in self.ui.connections:
+                try:
+                    an_epochs_display_list_widget.sigRefreshRequested.disconnect(self.ui.connections['epochs_render_configs_widget_refresh'])
+                except (TypeError, RuntimeError):
+                    pass
+            self.ui.connections['epochs_render_configs_widget_refresh'] = an_epochs_display_list_widget.sigRefreshRequested.connect(lambda x: self.build_or_update_epoch_render_configs_widget(parent=parent))
+            # Connect remove signal to remove datasource
+            if 'epochs_render_configs_widget_remove' in self.ui.connections:
+                try:
+                    an_epochs_display_list_widget.sigRemoveRequested.disconnect(self.ui.connections['epochs_render_configs_widget_remove'])
+                except (TypeError, RuntimeError):
+                    pass
+            self.ui.connections['epochs_render_configs_widget_remove'] = an_epochs_display_list_widget.sigRemoveRequested.connect(self.on_remove_epoch_series_from_widget)
+        else:
+            an_epochs_display_list_widget.update_from_configs(configs=epoch_display_configs)
+            # Ensure connection exists even when updating existing widget
+            if 'epochs_render_configs_widget_updated' not in self.ui.connections:
+                self.ui.connections['epochs_render_configs_widget_updated'] = an_epochs_display_list_widget.sigAnyConfigChanged.connect(lambda x: self.update_epochs_from_configs_widget())
+            # Ensure refresh connection exists
+            if 'epochs_render_configs_widget_refresh' not in self.ui.connections:
+                self.ui.connections['epochs_render_configs_widget_refresh'] = an_epochs_display_list_widget.sigRefreshRequested.connect(lambda x: self.build_or_update_epoch_render_configs_widget(parent=parent))
+            # Ensure remove connection exists
+            if 'epochs_render_configs_widget_remove' not in self.ui.connections:
+                self.ui.connections['epochs_render_configs_widget_remove'] = an_epochs_display_list_widget.sigRemoveRequested.connect(self.on_remove_epoch_series_from_widget)
+
+
+    def on_remove_epoch_series_from_widget(self, widget, config_name: str):
+        """Handle remove request from the config widget.
+        
+        This is called when the user clicks 'Remove' in the UI, which triggers:
+        1. Widget removal (handled in EpochRenderConfigsListWidget.on_remove_epoch_series)
+        2. Datasource removal (handled here)
+        3. Widget refresh (triggered by sigRenderedIntervalsListChanged)
+        
+        Args:
+            widget: The EpochRenderConfigsListWidget that emitted the signal
+            config_name: The name of the config/datasource to remove
+        """
+        print(f'EpochRenderingMixin.on_remove_epoch_series_from_widget(widget: {widget}, config_name: {config_name})')
+        if config_name in self.interval_datasources:
+            # Remove the datasource and rendered intervals
+            self.perform_remove_epoch_intervals(removed_interval_keys=[config_name], should_perform_remove=True)
+        else:
+            print(f'WARNING: config_name "{config_name}" not found in interval_datasources. Available keys: {list(self.interval_datasources.keys())}')
+
+
+    def perform_remove_epoch_intervals(self, removed_interval_keys: List[str], should_perform_remove: bool = True):
+        """ actually remove the intervals. """
+        if isinstance(removed_interval_keys, str):
+            removed_interval_keys = [removed_interval_keys] ## single key, wrap in list
+
+        _all_removed_items = {}
+        if removed_interval_keys:
+            print(f"Intervals to be removed (present in self.interval_datasources but not in update_dict): {removed_interval_keys}")
+            ## perform remove
+            if should_perform_remove:
+                print(f'trying to remove removed_interval_keys: {removed_interval_keys} intervals...')
+                for a_key in removed_interval_keys:
+                    print(f'\tremoving "{a_key}"')
+                    _removed_items_list = self.remove_rendered_intervals(name=a_key)
+                    if _removed_items_list:
+                        _all_removed_items[a_key] = _removed_items_list
+                    print(f'\t\tsuccess, removed {len(_removed_items_list)} items')
+                print('\tdone.')
+        return _all_removed_items
+
+
+    @function_attributes(short_name=None, tags=['update'], input_requires=[], output_provides=[], uses=[], used_by=['self.update_epochs_from_configs_widget'], creation_date='2026-02-02 14:24', related_items=[])
+    def perform_update_epoch_interval_render_configs_from_configs(self, update_dict: Dict[str, Union[EpochDisplayConfig, List[EpochDisplayConfig], Dict[str, EpochDisplayConfig]]]):
+        """ Called after updating datasources to directly (as opposed to indirectly) update existing IntervalRectsItem objects
+
+        Factored out of `update_epochs_from_configs_widget`
+        
+        """
+        # Directly update existing IntervalRectsItem objects
+        for interval_key, interval_update_kwargs in update_dict.items():
+            if interval_key in self.rendered_epochs and interval_key in self.interval_datasources:
+                # Rebuild data from updated datasource
+                datasource = self.interval_datasources[interval_key]
+                new_rects_item = Render2DEventRectanglesHelper.build_IntervalRectsItem_from_interval_datasource(datasource)
+                
+                # Extract visibility settings (handle both single dict and list of dicts)
+                # Each item in a list can have its own isVisible property (or it can be missing)
+                visibility_settings = None
+                if isinstance(interval_update_kwargs, (list, tuple)):
+                    # List case: extract visibility from each item
+                    visibility_settings = []
+                    for a_sub_kwargs in interval_update_kwargs:
+                        if not isinstance(a_sub_kwargs, dict):
+                            a_sub_kwargs = a_sub_kwargs.to_dict()
+                        # Extract visibility from each item (can be None if not specified)
+                        visibility_settings.append(a_sub_kwargs.get('isVisible', None))
+                else:
+                    # Single dict case
+                    if not isinstance(interval_update_kwargs, dict):
+                        interval_update_kwargs = interval_update_kwargs.to_dict()
+                    visibility_settings = interval_update_kwargs.get('isVisible', None)
+                
+                # Update all plot items for this interval
+                container = self.rendered_epochs[interval_key]
+                for a_plot, rect_item in container.items():
+                    if not isinstance(a_plot, str) and isinstance(rect_item, IntervalRectsItem):
+                        new_data = ColorDataframeColumnHelpers.copy_data(new_rects_item.data)
+                        rect_item.update_data(new_data)
+                        # Preserve tooltip function from original item
+                        if hasattr(new_rects_item, 'format_item_tooltip_fn'):
+                            rect_item.format_item_tooltip_fn = deepcopy(new_rects_item.format_item_tooltip_fn)
+                        # Apply visibility setting if provided
+                        # For list configs: only apply if all items have the same visibility (or all None)
+                        # For single configs: apply directly
+                        if visibility_settings is not None:
+                            if isinstance(visibility_settings, list):
+                                # List case: check if all non-None values are the same
+                                non_none_visibilities = [v for v in visibility_settings if v is not None]
+                                if len(non_none_visibilities) > 0:
+                                    # If all non-None values are the same, apply that visibility
+                                    if len(set(non_none_visibilities)) == 1:
+                                        rect_item.setVisible(non_none_visibilities[0])
+                                    # If they differ, we can't set per-rectangle visibility, so skip
+                                    # (IntervalRectsItem is a single graphics item that renders all rectangles)
+                            else:
+                                # Single config case: apply directly
+                                rect_item.setVisible(visibility_settings)
+                                    
+
+
+
+
+    def update_epoch_interval_render_configs_from_configs(self, _out_configs: Dict[str, Union[EpochDisplayConfig, List[EpochDisplayConfig], Dict[str, EpochDisplayConfig]]]):
+        """ Update plots from configs:
+        configs widget -> `Plotted Rects` 
+        
+        Usage:
+            an_epochs_display_list_widget = self.ui.get('epochs_render_configs_widget', None)
+            if an_epochs_display_list_widget is None:
+                # create a new one:    
+                raise NotImplementedError
+                # an_epochs_display_list_widget:EpochRenderConfigsListWidget = EpochRenderConfigsListWidget(active_2d_plot.extract_interval_display_config_lists(), parent=active_2d_plot)
+                # active_2d_plot.ui.epochs_render_configs_widget = an_epochs_display_list_widget
+            # else:
+            #     an_epochs_display_list_widget.update_from_configs(configs=epoch_display_configs)
+
+            ## get the configs from the configs widget
+            _out_configs = an_epochs_display_list_widget.configs_from_states()
+            
+        """
+        update_dict = {}
+        for k, v in _out_configs.items():
+            if not isinstance(v, (list, tuple)):
+                update_dict[k] = v.to_dict()
+            else:
+                update_dict[k] = [sub_v.to_dict() for sub_v in v] ## get the sub-items in the list
+
+        # Determine interval_keys that are missing from update_dict but exist in self.interval_datasources
+        removed_interval_keys = [k for k in self.rendered_epoch_series_names if k not in update_dict] # need to use this and not `self.interval_datasources.keys()` directly because it has non-attribute members like 'name'
+
+        if removed_interval_keys:
+            print(f"Intervals to be removed (present in self.interval_datasources but not in update_dict): {removed_interval_keys}")
+            self.perform_remove_epoch_intervals(removed_interval_keys=removed_interval_keys, should_perform_remove=True)
+
+
+        self.update_rendered_intervals_visualization_properties(update_dict=update_dict)
+
+
+
+
+    @function_attributes(short_name=None, tags=['epochs', 'epoch_render_configs', 'update', 'sync'], input_requires=[], output_provides=[], uses=['self.update_rendered_intervals_visualization_properties'], used_by=[], creation_date='2024-07-03 11:27', related_items=['build_or_update_epoch_render_configs_widget'])
+    def update_epochs_from_configs_widget(self):
+        """ Update plots from configs:
+        configs widget -> `Plotted Rects` 
+        
+        Usage:
+        update_epochs_from_configs_widget(active_2d_plot)
+
+        """
+        from neuropy.utils.misc import split_list_of_dicts        
+        from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.Mixins.RenderTimeEpochs.Render2DEventRectanglesHelper import Render2DEventRectanglesHelper
+        
+        an_epochs_display_list_widget = self.ui.get('epochs_render_configs_widget', None)
+        if an_epochs_display_list_widget is None:
+            # create a new one:    
+            raise NotImplementedError
+        
+        update_dict = an_epochs_display_list_widget.config_dicts_from_states()
+        # Determine interval_keys that are missing from update_dict but exist in self.interval_datasources
+        removed_interval_keys = [k for k in self.rendered_epoch_series_names if k not in update_dict] # need to use this and not `self.interval_datasources.keys()` directly because it has non-attribute members like 'name'
+
+        # Block signals to prevent circular updates
+        with self._block_datasource_signals():
+
+            if removed_interval_keys:
+                print(f"Intervals to be removed (present in self.interval_datasources but not in update_dict): {removed_interval_keys}")
+                self.perform_remove_epoch_intervals(removed_interval_keys=removed_interval_keys, should_perform_remove=True)
+
+            # Update datasources, but with datasource update signals blocked
+            self.update_rendered_intervals_visualization_properties(update_dict=update_dict)
+            
+            # Directly update existing IntervalRectsItem objects since we manually blocked update signals above
+            self.perform_update_epoch_interval_render_configs_from_configs(update_dict=update_dict)
+
+
+
+
+
+
+
+
+    @function_attributes(short_name=None, tags=['heights', 'sizing', 'geometry', 'intervals'], input_requires=[], output_provides=[], uses=['update_rendered_intervals_visualization_properties'], used_by=[], creation_date='2024-12-30 14:15', related_items=[])
+    def update_rendered_interval_heights(self, absolute_combined_height_px: float = 60.0):
+        """ 
+        Updates the total height
+        
+        Usage:
+        
+            update_rendered_interval_heights(active_2d_plot, absolute_combined_height_px=40.0)
+        
+        NOTE: epochs_update_dict -- hardcoded
+        
+        """
+        ## INPUTS: absolute_combined_height_px: float = 60.0
+        from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.Mixins.RenderTimeEpochs.Specific2DRenderTimeEpochs import General2DRenderTimeEpochs, Ripples_2DRenderTimeEpochs, inline_mkColor
+        
+        epochs_update_dict = {
+            'Replays':dict(y_location=-4.0, height=1.9, pen_color=inline_mkColor('orange', 0.8), brush_color=inline_mkColor('orange', 0.5)),
+            'Laps':dict(y_location=-2.0, height=0.9, pen_color=inline_mkColor('red', 0.8), brush_color=inline_mkColor('red', 0.5)),
+            'SessionEpochs ':dict(y_location=-1.0, height=0.9, pen_color=inline_mkColor('cyan', 0.8), brush_color=inline_mkColor('cyan', 0.5)),
+            # 'PBEs':dict(y_location=-2.0, height=1.5, pen_color=inline_mkColor('pink', 0.8), brush_color=inline_mkColor('pink', 0.5)),
+            # 'Ripples':dict(y_location=-12.0, height=1.5, pen_color=inline_mkColor('cyan', 0.8), brush_color=inline_mkColor('cyan', 0.5)),
+        }
+        
+        y_location_list: List[float] = []
+        for a_name, a_dict in epochs_update_dict.items():
+            a_dict['y_location_top'] = a_dict['y_location'] + a_dict['height']
+            y_location_list.append([a_dict['y_location'], a_dict['y_location_top']])
+
+        y_location_list = np.array(y_location_list)
+        y_location_min: float = np.min(y_location_list[:, 0])
+        y_location_max: float = np.max(y_location_list[:, 1]) # min, max
+
+        virtual_combined_height_px: float = np.abs(np.abs(y_location_max) - np.abs(y_location_min)) # 3.9
+        # virtual_combined_height_px
+        virtual_to_px_factor: float = absolute_combined_height_px / virtual_combined_height_px # 25.641025641025642
+        # virtual_to_px_factor
+        ## INPUTS: virtual_to_px_factor
+        scaled_epochs_update_dict = deepcopy(epochs_update_dict)
+        for a_name, a_dict in scaled_epochs_update_dict.items():
+            # a_dict['y_location_top'] = a_dict['y_location'] + a_dict['height']
+            a_dict['height'] = (a_dict['height'] * virtual_to_px_factor)
+            a_dict['y_location'] = (a_dict['y_location'] * virtual_to_px_factor)
+            del a_dict['y_location_top']
+            
+        ## OUTPUTS: scaled_epochs_update_dict   
+        self.update_rendered_intervals_visualization_properties(scaled_epochs_update_dict)
+
+
+    @function_attributes(short_name=None, tags=['intervals', 'active_window', 'jump', 'find'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2024-12-30 16:30', related_items=[])
+    def find_intervals_in_active_window(self, debug_print=False) -> Dict[str, pd.DataFrame]:
+        """ returns the intervals that fall completely within the current viewport window
+        
+        _out_intervals_within_active_window = active_2d_plot.find_intervals_in_active_window() # {'Replays': 633.6662150828633, 'Laps': 584.5415960000828, 'SessionEpochs': 0.0}
+        _out_intervals_within_active_window
+
+        """
+        ## Get Interval Datasources:
+        # interval_datasources = self.spike_raster_plt_2d.interval_datasources
+        rendered_epoch_series_names = self.rendered_epoch_series_names
+        interval_datasources = self.interval_datasources
+        _out_intervals_within_active_window = {}
+        for curr_jump_series_name, selected_rendered_interval_series_ds in interval_datasources.items():
+            if curr_jump_series_name in rendered_epoch_series_names: ## only get the real internals, not properties like `name`
+                assert curr_jump_series_name in interval_datasources, f"curr_jump_series_name: '{curr_jump_series_name}' not in interval_datasources: {interval_datasources}"
+                # selected_rendered_interval_series_ds = interval_datasources[curr_jump_series_name] # IntervalsDatasource
+                selected_rendered_interval_series_times_df = selected_rendered_interval_series_ds.time_column_values
+                ## Get current time window:
+                curr_time_window = self.animation_active_time_window.active_time_window # (45.12114057149739, 60.12114057149739)
+                ## Find the events beyond that time:
+                is_interval_entire_left_of_window = (selected_rendered_interval_series_times_df['t_end'].to_numpy() < curr_time_window[0]) # ends before the curr_time_window even starts
+                is_interval_entire_right_of_window = (selected_rendered_interval_series_times_df['t_start'].to_numpy() >= curr_time_window[1]) # starts after the end of the curr_time_window
+                is_interval_entire_outside_window = np.logical_or(is_interval_entire_left_of_window, is_interval_entire_right_of_window)
+                is_any_part_of_interval_inside_window = np.logical_not(is_interval_entire_outside_window)
+                filtered_times_df = selected_rendered_interval_series_times_df[is_any_part_of_interval_inside_window]
+                
+                if debug_print:
+                    print(f'curr_time_window: {curr_time_window}, filtered_times_df: {filtered_times_df}')
+                    
+                _out_intervals_within_active_window[curr_jump_series_name] = filtered_times_df
+            ## END if curr_jump_series_name in rendered_epoch_series_names
+        # END for curr_jump_series_name, selecte...
+        return _out_intervals_within_active_window
+
+
+    @function_attributes(short_name=None, tags=['intervals', 'active_window', 'jump', 'find'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2024-12-30 16:30', related_items=[])
+    def find_next_jump_intervals_in_active_window(self, is_jump_left:bool=True, debug_print=False) -> Dict[str, Optional[float]]:
+        """ returns the intervals that fall completely within the current viewport window
+        
+        next_target_jump_times_dict = active_2d_plot.find_next_jump_intervals_in_active_window(is_jump_left=True) # {'Replays': 633.6662150828633, 'Laps': 584.5415960000828, 'SessionEpochs': 0.0}
+        next_target_jump_times_dict
+
+        """
+        ## Get Interval Datasources:
+        # interval_datasources = self.spike_raster_plt_2d.interval_datasources
+        rendered_epoch_series_names = self.rendered_epoch_series_names
+        interval_datasources = self.interval_datasources
+
+        _out_jump_times_dict = {}
+        for curr_jump_series_name, selected_rendered_interval_series_ds in interval_datasources.items():
+            if curr_jump_series_name in rendered_epoch_series_names: ## only get the real internals, not properties like `name`
+                assert curr_jump_series_name in interval_datasources, f"curr_jump_series_name: '{curr_jump_series_name}' not in interval_datasources: {interval_datasources}"        
+
+                ## Get current time window:
+                curr_time_window = self.animation_active_time_window.active_time_window # (45.12114057149739, 60.12114057149739)
+                selected_rendered_interval_series_times_df = selected_rendered_interval_series_ds.time_column_values
+                
+                ## Find the events:
+                next_target_jump_time = None       
+                if is_jump_left:
+                    ## jump left:
+                    is_interval_entire_left_of_window = (selected_rendered_interval_series_times_df['t_end'].to_numpy() < curr_time_window[0]) # ends before the curr_time_window even starts
+                    is_interval_entire_right_of_window = (selected_rendered_interval_series_times_df['t_start'].to_numpy() >= curr_time_window[1]) # starts after the end of the curr_time_window
+                    is_interval_entire_outside_window = np.logical_or(is_interval_entire_left_of_window, is_interval_entire_right_of_window)
+                    is_any_part_of_interval_inside_window = np.logical_not(is_interval_entire_outside_window)
+                    is_any_part_of_interval_inside_or_left_of_window = np.logical_or(is_interval_entire_left_of_window, is_any_part_of_interval_inside_window)
+                    filtered_times_df = selected_rendered_interval_series_times_df[is_any_part_of_interval_inside_or_left_of_window]
+                    if len(filtered_times_df) > 0:
+                        next_target_jump_time = filtered_times_df['t_start'].to_numpy()[-1] ## return the latest interval start time
+                    
+                else:
+                    ## jump right
+                    # print(f'WARN: .find_next_jump_intervals_in_active_window(is_jump_left=False) is not fully implemented! Only supports jumping left now!')
+                    is_interval_entire_left_of_window = (selected_rendered_interval_series_times_df['t_end'].to_numpy() < curr_time_window[0]) # ends before the curr_time_window even starts
+                    is_interval_entire_right_of_window = (selected_rendered_interval_series_times_df['t_start'].to_numpy() >= curr_time_window[1]) # starts after the end of the curr_time_window
+                    is_interval_entire_outside_window = np.logical_or(is_interval_entire_left_of_window, is_interval_entire_right_of_window)
+                    is_any_part_of_interval_inside_window = np.logical_not(is_interval_entire_outside_window)
+                    is_any_part_of_interval_inside_or_right_of_window = np.logical_or(is_interval_entire_right_of_window, is_any_part_of_interval_inside_window)
+                    filtered_times_df = selected_rendered_interval_series_times_df[is_any_part_of_interval_inside_or_right_of_window]
+                    if len(filtered_times_df) > 1:
+                        ## not the first, which we may have just jumped to, but the second
+                        next_target_jump_time = filtered_times_df['t_start'].to_numpy()[1] ## return the earliest interval start time... does this include ones within the window?
+                        
+
+                if debug_print:
+                    print(f'curr_time_window: {curr_time_window}, next_target_jump_time: {next_target_jump_time}')
+                    
+                _out_jump_times_dict[curr_jump_series_name] = next_target_jump_time
+                ## END if curr_jump_series_name in rendered_epoch_series_names
+                
+        # END for curr_jump_series_name, selecte...
+        return _out_jump_times_dict
+    
+
+    # ---------------------------------------------------------------------------- #
+    #                          Private Implementor Methods                         #
+    # ---------------------------------------------------------------------------- #
+    def _perform_add_render_item(self, a_plot, a_render_item):
+        """Performs the operation of adding the render item from the plot specified
+
+        Args:
+            a_render_item (_type_): _description_
+            a_plot (_type_): _description_
+        """
+        raise NotImplementedError  # Needs to be overriden for the specific plot type in the implementor
+        
+        
+    def _perform_remove_render_item(self, a_plot, a_render_item):
+        """Performs the operation of removing the render item from the plot specified
+
+        Args:
+            a_render_item (IntervalRectsItem): _description_
+            a_plot (PlotItem): _description_
+        """
+        raise NotImplementedError  # Needs to be overriden for the specific plot type in the implementor
+    
+    
+    # ---------------------------------------------------------------------------- #
+    #                                 Class Methods                                #
+    # ---------------------------------------------------------------------------- #
+    @classmethod
+    def compute_bounds_adjustment_for_rect_item(cls, a_plot, a_rect_item, position_mode: AddedEpochPositionNormalizationMode=AddedEpochPositionNormalizationMode.ABSOLUTE, should_apply_adjustment:bool=True, debug_print=False):
+        """ 
+        NOTE: 2D Only
+        
+        Inputs:
+            a_plot: PlotItem or equivalent
+            a_rect_item: 
+            should_apply_adjustment: bool - If True, the adjustment is actually applied
+        Returns:
+            adjustment_needed: a float representing the difference of adjustment after adjusting or NONE if no changes needed
+            
+        Usage:
+            Called in add_rendered_intervals(...) above, but not sure if it's working or helping.
+            The rects that do work are the BurstIntervals which rely on *.y_fragile_linear_neuron_IDX_map instead.
+        """
+        adjustment_needed = None
+        curr_x_min, curr_x_max, curr_y_min, curr_y_max = cls.get_plot_view_range(a_plot, debug_print=False) # curr_x_min: 22.30206346133491, curr_x_max: 1739.1355703625595, curr_y_min: 0.5, curr_y_max: 39.5        
+        if debug_print:
+            print(f'compute_bounds_adjustment_for_rect_item(a_plot, a_rect_item):')
+            print(f'\ta_plot.y: {curr_y_min}, {curr_y_max}')
+            
+
+        ## TODO Implement the different interval positioning methods:
+        if position_mode.name == AddedEpochPositionNormalizationMode.ABSOLUTE.name:
+            print(f'ABSOLUTE.')
+            new_min_y_range, new_max_y_range = cls.get_added_rect_item_required_y_value(a_rect_item, debug_print=debug_print)
+            if (new_max_y_range > curr_y_max):
+                # needs adjustment
+                adjustment_needed = (new_max_y_range - curr_y_max)
+                if debug_print:
+                    print(f'\t needs adjustment: a_rect_item requested new y_max: {new_max_y_range}')
+                        
+            final_y_max = max(new_max_y_range, curr_y_max)
+            
+            if (new_min_y_range < curr_y_min):
+                # needs adjustment
+                if adjustment_needed is None:
+                    adjustment_needed = 0
+                adjustment_needed = adjustment_needed + (new_min_y_range - curr_y_min)
+                if debug_print:
+                    print(f'\t needs adjustment: a_rect_item requested new new_min_y_range: {new_min_y_range}')            
+            else:
+                adjusted_y_min_range = new_min_y_range
+        
+            final_y_min = min(new_min_y_range, curr_y_min)
+        
+
+
+
+        elif position_mode.name == AddedEpochPositionNormalizationMode.ADD_HEIGHT.name:
+            print(f'ADD_HEIGHT')
+        elif position_mode.name == AddedEpochPositionNormalizationMode.SCALE_HEIGHT.name:
+            print(f'SCALE_HEIGHT')
+        else:
+            raise NotImplementedError(f'position_mode: {position_mode} does not match any known enum value: AddedEpochPositionNormalizationMode.list_names(): {AddedEpochPositionNormalizationMode.list_names()}')
+
+
+
+        if (adjustment_needed and should_apply_adjustment):
+            a_plot.setYRange(final_y_min, final_y_max, padding=0)
+
+    
+        return adjustment_needed
+    
+    
+    @staticmethod
+    def get_added_rect_item_required_y_value(a_rect_item, debug_print=False):
+        """  
+        NOTE: 2D Only
+            curr_rect.top() # 43.0
+            curr_rect.bottom() # 45.0 (why is bottom() greater than top()?
+            # curr_rect.y()
+            
+         Usage:
+            Only known to be used by .compute_bounds_adjustment_for_rect_item(...) above
+        """
+        curr_rect = a_rect_item.boundingRect() # PyQt5.QtCore.QRectF(29.0, 43.0, 1683.0, 2.0)
+        new_min_y_range = min(curr_rect.top(), curr_rect.bottom())
+        new_max_y_range = max(curr_rect.top(), curr_rect.bottom())
+        if debug_print:
+            print(f'new_min_y_range: {new_min_y_range}')
+            print(f'new_max_y_range: {new_max_y_range}')
+        return new_min_y_range, new_max_y_range
+
+    
+    @staticmethod
+    def get_plot_view_range(a_plot, debug_print=True):
+        """ gets the current viewRange for the passed in plot
+        NOTE: 2D Only
+      
+        Inputs:
+            a_plot: PlotItem
+        Returns:
+            (curr_x_min, curr_x_max, curr_y_min, curr_y_max)
+
+        Usage:
+            Only known to be used by .compute_bounds_adjustment_for_rect_item(...) above
+            
+        Examples:
+            curr_x_min, curr_x_max, curr_y_min, curr_y_max = get_plot_view_range(main_plot_widget, debug_print=True)
+            curr_x_min, curr_x_max, curr_y_min, curr_y_max = get_plot_view_range(background_static_scroll_plot_widget, debug_print=True)
+        """
+        curr_x_range, curr_y_range = a_plot.viewRange() # [[30.0, 45.0], [-1.359252049028905, 41.3592520490289]]
+        if debug_print:
+            print(f'curr_x_range: {curr_x_range}, curr_y_range: {curr_y_range}')
+        curr_x_min, curr_x_max = curr_x_range
+        curr_y_min, curr_y_max = curr_y_range
+        # curr_x_min, curr_x_max, curr_y_min, curr_y_max = main_plot_widget.viewRange()
+        if debug_print:
+            print(f'curr_x_min: {curr_x_min}, curr_x_max: {curr_x_max}, curr_y_min: {curr_y_min}, curr_y_max: {curr_y_max}')
+        return (curr_x_min, curr_x_max, curr_y_min, curr_y_max)
+
+
+    @classmethod
+    def build_stacked_epoch_layout(cls, rendered_interval_heights, epoch_render_stack_height=40.0, interval_stack_location='below', debug_print=True):
+        """ Builds a stack layout for the list of specified epochs
+
+            rendered_interval_keys = ['_', 'SessionEpochs', 'Laps', '_', 'PBEs', 'Ripples', 'Replays'] # '_' indicates a vertical spacer
+            rendered_interval_heights = [0.2, 1.0, 1.0, 0.1, 1.0, 1.0, 1.0] # ratio of heights to each interval
+            vertical_spacer_height = 0.2
+            epoch_render_stack_height = 40.0 # the height of the entire stack containing all rendered epochs:
+            interval_stack_location = 'below' # 'below' or 'above'
+
+        Usage:
+            from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.Mixins.RenderTimeEpochs.Specific2DRenderTimeEpochs import General2DRenderTimeEpochs
+
+            rendered_interval_keys = ['_', 'SessionEpochs', 'Laps', '_', 'PBEs', 'Ripples', 'Replays'] # '_' indicates a vertical spacer
+            desired_interval_height_ratios = [0.2, 1.0, 1.0, 0.1, 1.0, 1.0, 1.0] # ratio of heights to each interval
+            required_vertical_offsets, required_interval_heights = build_stacked_epoch_layout(desired_interval_height_ratios, epoch_render_stack_height=40.0, interval_stack_location='below')
+
+
+            ## Inline Concise: Position Replays, PBEs, and Ripples all below the scatter:
+            for interval_key, y_location, height in zip(rendered_interval_keys, required_vertical_offsets, required_interval_heights):
+                if interval_key in active_2d_plot.interval_datasources:
+                    active_2d_plot.interval_datasources[interval_key].update_visualization_properties(lambda active_df, **kwargs: General2DRenderTimeEpochs._update_df_visualization_columns(active_df, y_location=y_location, height=height, **kwargs)) ## Fully inline
+        """
+        normalized_interval_heights = rendered_interval_heights/np.sum(rendered_interval_heights) # array([0.2, 0.2, 0.2, 0.2, 0.2])
+        required_interval_heights = normalized_interval_heights * epoch_render_stack_height # array([3.2, 3.2, 3.2, 3.2, 3.2])
+        required_vertical_offsets = np.cumsum(required_interval_heights) # array([ 3.2  6.4  9.6 12.8 16.])
+        if interval_stack_location == 'below':
+            required_vertical_offsets = required_vertical_offsets * -1.0 # make offsets negative if it's below the plot
+        elif interval_stack_location == 'above':
+            # if it's to be placed above the plot, we need to add the top of the plot to each of the offsets:
+            required_vertical_offsets = required_vertical_offsets + 0.0 # TODO: get top of plot
+        else:
+            print(f"interval_stack_location: str must be either ('below' or 'above') but was {interval_stack_location}")
+            raise NotImplementedError
+        if debug_print:
+            print(f'required_interval_heights: {required_interval_heights}, required_vertical_offsets: {required_vertical_offsets}')
+
+        return required_vertical_offsets, required_interval_heights
+
+
+
+    

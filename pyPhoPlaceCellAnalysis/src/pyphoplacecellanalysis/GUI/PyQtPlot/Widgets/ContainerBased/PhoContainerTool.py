@@ -1,0 +1,228 @@
+import operator
+from collections import OrderedDict
+
+from copy import deepcopy
+from typing import Optional, Dict, List, Tuple, Callable, Union
+from attrs import define, field, Factory
+import numpy as np
+import pandas as pd
+import pyphoplacecellanalysis.External.pyqtgraph as pg
+from pyphoplacecellanalysis.External.pyqtgraph import QtCore, QtGui, QtWidgets
+# from pyphoplacecellanalysis.External.pyqtgraph.graphicsItems.GraphicsWidget import GraphicsWidget
+
+from pyphocorehelpers.DataStructure.general_parameter_containers import VisualizationParameters, RenderPlotsData, RenderPlots # PyqtgraphRenderPlots
+from pyphocorehelpers.gui.PhoUIContainer import PhoUIContainer
+from pyphocorehelpers.DataStructure.RenderPlots.PyqtgraphRenderPlots import PyqtgraphRenderPlots
+from pyphocorehelpers.DataStructure.RenderPlots.MatplotLibRenderPlots import MatplotlibRenderPlots
+from pyphocorehelpers.DataStructure.RenderPlots.SilxRenderPlots import SilxRenderPlots
+
+
+import pyphoplacecellanalysis.External.pyqtgraph as pg
+
+from pyphocorehelpers.programming_helpers import metadata_attributes
+from pyphocorehelpers.function_helpers import function_attributes
+from neuropy.utils.mixins.AttrsClassHelpers import keys_only_repr
+from neuropy.utils.indexing_helpers import wrap_in_container_if_needed, unwrap_single_item, flatten_dict
+
+
+__all__ = ['PhoBaseContainerTool', 'GenericMatplotlibContainer', 'GenericPyQtGraphContainer']
+
+
+@metadata_attributes(short_name=None, tags=['gui'], input_requires=[], output_provides=[], uses=['RenderPlots', 'RenderPlotsData', 'PhoUIContainer'], used_by=[], creation_date='2023-11-17 19:59', related_items=[])
+@define(slots=False, eq=False)
+class PhoBaseContainerTool:
+    """ a tool in a container:
+    
+    from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.ContainerBased.PhoContainerTool import PhoBaseContainerTool
+    
+    
+    """
+    plots: RenderPlots = field(default=Factory(PyqtgraphRenderPlots, 'plotter'))
+    plots_data: RenderPlotsData = field(default=Factory(RenderPlotsData, 'plotter'), repr=False)
+    ui: PhoUIContainer = field(default=Factory(PhoUIContainer, 'plotter'), repr=False)
+    params: VisualizationParameters = field(default=Factory(VisualizationParameters, 'plotter'), repr=keys_only_repr)
+
+
+@metadata_attributes(short_name=None, tags=['container', 'generic', 'matplotlib'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2025-05-12 10:03', related_items=['PhoBaseContainerTool', 'GenericPyQtGraphContainer','GenericSilxContainer'])
+@define(slots=False, eq=False)
+class GenericMatplotlibContainer(PhoBaseContainerTool):
+    """ a tool in a container:
+    
+    from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.ContainerBased.PhoContainerTool import GenericMatplotlibContainer
+    
+    
+    """
+    name: str = field(default='plot')
+    plots: RenderPlots = field(default=Factory(MatplotlibRenderPlots, 'plotter'), repr=keys_only_repr)
+    plots_data: RenderPlotsData = field(default=Factory(RenderPlotsData, 'plotter'), repr=False)
+    ui: PhoUIContainer = field(default=Factory(PhoUIContainer, 'plotter'), repr=False)
+    params: VisualizationParameters = field(default=Factory(VisualizationParameters, 'plotter'), repr=keys_only_repr)
+
+    # Passthru/derived properties ________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________ #
+    @property
+    def figures(self):
+        """The figures property."""
+        return self.plots.figures
+    @figures.setter
+    def figures(self, value):
+        self.plots.figures = value
+
+    @property
+    def axes(self):
+        """The axes property."""
+        return self.plots.axes
+    @axes.setter
+    def axes(self, value):
+        self.plots.axes = value
+
+    @property
+    def num_figures(self) -> int:
+        """The num_figures property."""
+        return self.plots.num_figures
+
+    @property
+    def num_axes(self) -> int:
+        """The num_axes property."""
+        return self.plots.num_axes
+    
+
+    # Singular Accessors _________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________________ #
+    @property
+    def fig(self):
+        """The fig property."""
+        return self.plots.fig
+    @fig.setter
+    def fig(self, value):
+        self.plots.fig = value
+
+    @property
+    def ax(self):
+        """The ax property."""
+        return self.plots.ax
+    @ax.setter
+    def ax(self, value):
+        self.plots.ax = value
+        
+
+    @classmethod
+    def init_from_matplotlib_objects(cls, name='MatplotlibRenderPlots', figures=[], axes=[], context=None, plots: Optional[Dict]=None, plots_data: Optional[Dict]=None, **kwargs) -> "GenericMatplotlibContainer":
+        if plots is None:
+            plots = {}
+        if plots_data is None:
+            plots_data = {}
+            
+        plots = MatplotlibRenderPlots(name=name, figures=figures, axes=axes, context=context, **plots)
+        plots_data = RenderPlotsData(name=name, **plots_data)
+        _obj = cls(name=name, plots=plots, plots_data=plots_data, **kwargs)
+        
+        return _obj
+        
+
+
+@metadata_attributes(short_name=None, tags=['unused', 'container', 'pyqtgraph'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2023-11-17 20:06', related_items=['PhoBaseContainerTool','GenericMatplotlibContainer', 'GenericSilxContainer'])
+@define(slots=False, eq=False)
+class GenericPyQtGraphContainer:
+    """ GenericPyQtGraphContainer holds related plots, their data, and methods that manipulate them in a straightforward way
+
+    from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.ContainerBased.PhoContainerTool import GenericPyQtGraphContainer
+
+    """
+    name: str = field(default='plot')
+    plots: PyqtgraphRenderPlots = field(default=Factory(PyqtgraphRenderPlots, 'plotter'))
+    plots_data: RenderPlotsData = field(default=Factory(RenderPlotsData, 'plotter'))
+    ui: PhoUIContainer = field(default=Factory(PhoUIContainer, 'plotter'))
+    params: VisualizationParameters = field(default=Factory(VisualizationParameters, 'plotter'), repr=keys_only_repr)
+
+    @property
+    def plot_data(self) -> RenderPlotsData:
+        """The plot_data property."""
+        return self.plots_data
+    @plot_data.setter
+    def plot_data(self, value: RenderPlotsData):
+        self.plots_data = value
+
+
+@metadata_attributes(short_name=None, tags=['container', 'Silx'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2026-01-12 07:14', related_items=['PhoBaseContainerTool','GenericMatplotlibContainer', 'GenericPyQtGraphContainer'])
+@define(slots=False, eq=False)
+class GenericSilxContainer:
+    """ GenericPyQtGraphContainer holds related plots, their data, and methods that manipulate them in a straightforward way
+
+    from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.ContainerBased.PhoContainerTool import GenericSilxContainer
+
+    """
+    name: str = field(default='plot')
+    plots: SilxRenderPlots = field(default=Factory(SilxRenderPlots, 'plotter'))
+    plots_data: RenderPlotsData = field(default=Factory(RenderPlotsData, 'plotter'))
+    ui: PhoUIContainer = field(default=Factory(PhoUIContainer, 'plotter'))
+    params: VisualizationParameters = field(default=Factory(VisualizationParameters, 'plotter'), repr=keys_only_repr)
+
+
+
+
+
+
+# @metadata_attributes(short_name=None, tags=['unused', 'container', 'pyqtgraph', 'interactive', 'scatterplot'], input_requires=[], output_provides=[], uses=[], used_by=[], creation_date='2023-11-17 20:06', related_items=[])
+# @define(slots=False)
+# class GenericPyQtGraphScatterClicker:
+#     """ GenericPyQtGraphContainer holds related plots, their data, and methods that manipulate them in a straightforward way
+
+#     from pyphoplacecellanalysis.GUI.PyQtPlot.Widgets.ContainerBased.RankOrderRastersDebugger import GenericPyQtGraphScatterClicker
+
+#     """
+#     lastClickedDict: Dict = field(default=Factory(dict))
+
+
+#     def on_scatter_plot_clicked(self, plot, evt):
+#         """ captures `lastClicked` 
+#         plot: <pyphoplacecellanalysis.External.pyqtgraph.graphicsItems.PlotDataItem.PlotDataItem object at 0x0000023C7D74C8B0>
+#         clicked points <MouseClickEvent (78.6115,-2.04825) button=1>
+
+#         """
+#         # global lastClicked  # Declare lastClicked as a global variable
+#         if plot not in self.lastClickedDict:
+#             self.lastClickedDict[plot] = None
+
+#         # for p in self.lastClicked:
+#         # 	p.resetPen()
+#         # print(f'plot: {plot}') # plot: <pyphoplacecellanalysis.External.pyqtgraph.graphicsItems.PlotDataItem.PlotDataItem object at 0x0000023C7D74C8B0>
+#         # print(f'\tevt: {evt}')	
+#         # print("clicked points", evt.pos()) # clicked points <MouseClickEvent (48.2713,1.32425) button=1>
+#         # print(f'args: {args}')
+#         pt_x, pt_y = evt.pos()
+#         idx_x = int(round(pt_x))
+#         print(f'\tidx_x: {idx_x}')
+#         # pts = plot.pointsAt(evt.pos())
+#         # print(f'pts: {pts}')
+#         # for p in points:
+#         # 	p.setPen(clickedPen)
+#         # self.lastClicked = idx_x
+#         self.lastClickedDict[plot] = idx_x
+
+
+
+
+# lastClicked = []
+# def _test_scatter_plot_clicked(plot, evt):
+# 	""" captures `lastClicked` 
+# 	plot: <pyphoplacecellanalysis.External.pyqtgraph.graphicsItems.PlotDataItem.PlotDataItem object at 0x0000023C7D74C8B0>
+# 	clicked points <MouseClickEvent (78.6115,-2.04825) button=1>
+
+# 	"""
+# 	global lastClicked  # Declare lastClicked as a global variable
+# 	# for p in lastClicked:
+# 	# 	p.resetPen()
+# 	# print(f'plot: {plot}') # plot: <pyphoplacecellanalysis.External.pyqtgraph.graphicsItems.PlotDataItem.PlotDataItem object at 0x0000023C7D74C8B0>
+# 	# print(f'\tevt: {evt}')	
+# 	# print("clicked points", evt.pos()) # clicked points <MouseClickEvent (48.2713,1.32425) button=1>
+# 	# print(f'args: {args}')
+# 	pt_x, pt_y = evt.pos()
+# 	idx_x = int(round(pt_x))
+# 	print(f'\tidx_x: {idx_x}')
+# 	# pts = plot.pointsAt(evt.pos())
+# 	# print(f'pts: {pts}')
+# 	# for p in points:
+# 	# 	p.setPen(clickedPen)
+# 	lastClicked = idx_x
+
+
+
