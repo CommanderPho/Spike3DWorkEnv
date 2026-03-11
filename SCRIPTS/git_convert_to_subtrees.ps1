@@ -76,20 +76,20 @@ function Convert-SubmoduleToSubtree {
 }
 
 # Execution List
-# Replace the URLs below with your actual repository URLs
-# Optional: set $defaultBranch (e.g. 'main' or 'master') to force branch; otherwise detected per remote
-$defaultBranch = ''
+# Replace the URLs and Branch below with your actual repository URLs and desired branch per subtree.
+# Branch: set to '' to auto-detect from remote HEAD; otherwise e.g. 'main', 'master', 'develop'.
 $submodules = @{
-    "NeuroPy"                = "https://github.com/CommanderPho/NeuroPy.git"
-    "pyPhoCoreHelpers"       = "https://github.com/CommanderPho/pyPhoCoreHelpers.git"
-    "pyPhoPlaceCellAnalysis" = "https://github.com/CommanderPho/pyPhoPlaceCellAnalysis.git"
-    "Spike3D"                = "https://github.com/CommanderPho/Spike3D.git"
+    "NeuroPy"                = @{ Url = "https://github.com/CommanderPho/NeuroPy.git"; Branch = "feature/safe-advance" }
+    "pyPhoCoreHelpers"       = @{ Url = "https://github.com/CommanderPho/pyPhoCoreHelpers.git"; Branch = "release/pho-diba-2025-paper" }
+    "pyPhoPlaceCellAnalysis" = @{ Url = "https://github.com/CommanderPho/pyPhoPlaceCellAnalysis.git"; Branch = "develop" }
+    "Spike3D"                = @{ Url = "https://github.com/CommanderPho/Spike3D.git"; Branch = "master" }
 }
 
 $failed = @()
 foreach ($name in $submodules.Keys) {
     try {
-        Convert-SubmoduleToSubtree -RepoPath $name -RemoteUrl $submodules[$name] -Branch $defaultBranch
+        $entry = $submodules[$name]
+        Convert-SubmoduleToSubtree -RepoPath $name -RemoteUrl $entry.Url -Branch $entry.Branch
     } catch {
         Write-Error "Convert-SubmoduleToSubtree failed for $name : $_"
         $failed += $name
