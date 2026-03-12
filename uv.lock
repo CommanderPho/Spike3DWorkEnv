@@ -9682,13 +9682,12 @@ default = [
 
 [[package]]
 name = "neuro-monorepo"
-version = "0.1.0"
+version = "0.2.0"
 source = { virtual = "." }
 dependencies = [
     { name = "neuropy" },
     { name = "pyphocorehelpers" },
     { name = "pyphoplacecellanalysis" },
-    { name = "spike3d" },
 ]
 
 [package.metadata]
@@ -9696,7 +9695,6 @@ requires-dist = [
     { name = "neuropy", editable = "NeuroPy" },
     { name = "pyphocorehelpers", editable = "pyPhoCoreHelpers" },
     { name = "pyphoplacecellanalysis", editable = "pyPhoPlaceCellAnalysis" },
-    { name = "spike3d", editable = "Spike3D" },
 ]
 
 [[package]]

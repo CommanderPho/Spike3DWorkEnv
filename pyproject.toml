@@ -1,13 +1,13 @@
 [project]
 name = "neuro-monorepo"
-version = "0.1.0"
+version = "0.2.0"
 description = "Monorepo for neuroscientific data analysis"
 requires-python = ">=3.9"
 dependencies = [
     "pyPhoCoreHelpers",
     "NeuroPy",
     "pyPhoPlaceCellAnalysis",
-    "Spike3D",
+    # "Spike3D",
 ]
 
 [tool.uv.workspace]

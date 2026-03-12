@@ -185,11 +185,12 @@ dependencies = [
     "pyrefly>=0.53.0",
 ]
 
-[project.scripts]
-pull-changes = "scripts/unix/repos_pull_changes.sh"
-launch-jupyter-remote = "scripts/unix/launch_jupyter_lab_with_remote_access.sh"
-setup_dependent_repos = "scripts/setup_dependent_repos.py"
-rebuild_typestubs_and_requirements = "scripts/windows/export_requirements_and_create_typestubs.ps1"
+# [project.scripts]
+# pull-changes = "scripts/unix/repos_pull_changes.sh"
+# launch-jupyter-remote = "scripts/unix/launch_jupyter_lab_with_remote_access.sh"
+# setup_dependent_repos = "scripts/setup_dependent_repos.py"
+# rebuild_typestubs_and_requirements = "scripts/windows/export_requirements_and_create_typestubs.ps1"
+# [project.scripts] removed: pull-changes, launch-jupyter-remote, rebuild_typestubs_and_requirements were non-Python; setup_dependent_repos was not a valid entry point (use scripts/setup_dependent_repos.py directly if needed)
 
 [dependency-groups]
 dev = [
@@ -248,3 +249,11 @@ silx = {git = "https://github.com/CommanderPho/silx.git", rev = "develop"}
 neuropy = { workspace = true }
 maxlikespy = { git = "https://github.com/CommanderPho/maxlikespy" }
 pho-jupyter-preview-widget = { git = "https://github.com/CommanderPho/pho_jupyter_preview_widget.git", rev="master"}
+
+
+# [build-system]
+# requires = ["setuptools>=61.0", "wheel"]
+# build-backend = "setuptools.build_meta"
+
+# [tool.setuptools.packages.find]
+# include = ["pho*"]
