@@ -29,3 +29,5 @@ exports/FM-{3DD825E8-14F6-49CE-943E-B5210B576059}.ico
 templating/uv_deps_switcher/backups/
 pyPhoPlaceCellAnalysis/templating/uv_deps_switcher/backups/pyproject.toml.bak
 pyPhoCoreHelpers/templating/uv_deps_switcher/backups/pyproject.toml.bak
+**/*.egg-info
+**/templating/uv_deps_switcher/backups

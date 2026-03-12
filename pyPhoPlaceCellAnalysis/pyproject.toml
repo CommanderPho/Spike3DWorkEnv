@@ -69,7 +69,7 @@ gui = [
     "loguru>=0.6.0,<0.7",
     "pyopengl>=3.1.6,<4",
     "mpl-multitab",
-    "patchworklib>=0.5.2,<0.6",
+    "patchworklib>=0.6.1,<0.7",
     "pyqt-responsive-label>=0.0.3,<0.0.4",
 ]
 testing = [

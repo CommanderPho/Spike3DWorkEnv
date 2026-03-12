@@ -27,7 +27,7 @@ cairosvg = "^2.7.1"
 importlib-metadata = "^6.0.0"
 
 [tool.poetry.group.viz.dependencies]
-pyvista = "^0.38.0"
+pyvista = "^0.43.0"
 matplotlib = "^3.6.3"
 vedo = {git = "https://github.com/CommanderPho/vedo.git", rev = "release/pho-working"}
 hdf5plugin = "^4.1.1"
