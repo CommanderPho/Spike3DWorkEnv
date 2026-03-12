@@ -91,6 +91,7 @@ mpl-multitab = { git = "https://github.com/CommanderPho/mpl-multitab.git", rev =
 neuropy = { workspace = true }
 pybursts = { git = "https://github.com/CommanderPho/pybursts.git", rev = "master" }
 pyphocorehelpers = { workspace = true }
+silx = { workspace = true }
 
 pyqode-core = {path = "../pyqode.core/dist/current.whl"} # pyqode_core-3.0.0-py2.py3-none-any.whl
 pyqode-python = {path = "../pyqode.python/dist/current.whl"}

@@ -38,7 +38,7 @@ viz = [
     "vedo",
     "vtk>=9.0,<9.1",  # vedo (release/pho-working) requires vtk<9.1.0
     "hdf5plugin>=4.1.1,<5",
-    "silx>=1.1.2,<2",
+    "silx[full]>=2.2.0,<3",
     "PyQt5Singleton>=0.1,<0.2",
     "QtPy>=2.1.0,<3",
     "PyQt5-sip>=12.11.1,<13",
@@ -54,6 +54,7 @@ default-groups = [
 [tool.uv.sources]
 vedo = { git = "https://github.com/CommanderPho/vedo.git", rev = "release/pho-working" }
 neuropy = { workspace = true }
+silx = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

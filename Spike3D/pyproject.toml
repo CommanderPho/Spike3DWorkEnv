@@ -245,10 +245,9 @@ pybursts = { git = "https://github.com/CommanderPho/pybursts.git", rev = "master
 flexitext = { git = "https://github.com/CommanderPho/flexitext.git", rev = "main" }
 pylustrator = { git = "https://github.com/CommanderPho/pylustrator.git" }
 pyqtinspect = { path = "../PyQtInspect-Open", editable=false }
-silx = {git = "https://github.com/CommanderPho/silx.git", rev = "develop"}
+silx = { workspace = true }
 neuropy = { workspace = true }
 maxlikespy = { git = "https://github.com/CommanderPho/maxlikespy" }
-pho-jupyter-preview-widget = { git = "https://github.com/CommanderPho/pho_jupyter_preview_widget.git", rev="master"}
 
 
 # [build-system]

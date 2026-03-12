@@ -16,6 +16,7 @@ members = [
     "pyPhoCoreHelpers",
     "pyPhoPlaceCellAnalysis",
     "Spike3D",
+    "silx",
 ]
 
 [tool.uv.sources]
@@ -23,3 +24,4 @@ pyPhoCoreHelpers = { workspace = true }
 NeuroPy = { workspace = true }
 pyPhoPlaceCellAnalysis = { workspace = true }
 Spike3D = { workspace = true }
+silx = { workspace = true }

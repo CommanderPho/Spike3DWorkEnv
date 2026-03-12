@@ -1,2 +1,3 @@
 [tool.uv.source]
 neuropy = {path = "../NeuroPy", develop=true}
+silx = {git = "https://github.com/CommanderPho/silx.git", rev = "develop"}

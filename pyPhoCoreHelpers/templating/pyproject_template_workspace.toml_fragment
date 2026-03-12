@@ -1,2 +1,3 @@
 [tool.uv.sources]
 neuropy = { workspace = true }
+silx = { workspace = true }
